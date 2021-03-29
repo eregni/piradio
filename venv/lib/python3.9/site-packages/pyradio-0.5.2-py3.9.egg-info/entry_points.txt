@@ -1,0 +1,3 @@
+[console_scripts]
+pyradio = pyradio.main:shell
+
