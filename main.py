@@ -2,6 +2,7 @@
 import logging
 import signal
 import vlc
+import urllib.request
 
 SAVED_STATION = 'last_station.txt'
 RADIO = [
@@ -12,7 +13,7 @@ RADIO = [
         'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'
     ]
 
-# Logging config
+# ### Logging config ###
 LEVEL = logging.DEBUG
 LOG_FORMATTER = logging.Formatter(
     fmt='[%(asctime)s.%(msecs)03d] [%(module)s] %(levelname)s: %(message)s',
@@ -25,13 +26,14 @@ LOG_HANDLER.setLevel(LEVEL)
 LOG = logging.getLogger()
 LOG.addHandler(LOG_HANDLER)
 LOG.setLevel(LEVEL)
-# End logging config
+# ### End logging config ###
 
 
 def main():
+    """Main loop"""
     LOG.debug("start radio")
     instance = vlc.Instance()
-    player = vlc.MediaPlayer()
+    player = instance.media_player_new()
     try:
         with open(SAVED_STATION, 'r') as f:
             station = f.readline()
@@ -39,25 +41,49 @@ def main():
         station = get_next_station()
         save_last_station(station)
 
-    player.set_mrl(station)
+    media = instance.media_new(station)
+    player.set_media(media)
     player.play()
-    media = player.get_media()
     vlc.libvlc_media_parse(media)
-    test = vlc.libvlc_media_get_meta(media, vlc.Meta().Date)
+
     while True:  # todo -> btn 'stop' || btn 'next' == False
         pass
 
 
 def get_next_station(current_station=RADIO[-1]):
+    """
+    Get next station from list
+    :param current_station: list with station url's
+    :return: str. Radio url
+    """
+    LOG.debug("Getting next station")
     if current_station == RADIO[-1]:
         return RADIO[0]
     else:
         return RADIO[RADIO.index(current_station) + 1]
 
 
+def get_radio_metadata(url):
+    """
+    Get icy-data from radio station
+    :param url: str. Stream url
+    :return: dict with icy metadata
+    """
+    LOG.debug("Getting metadata")
+    request = urllib.request.Request(url)
+    request.add_header("icy-metadata", 1)
+    response = urllib.request.urlopen(request, timeout=6)
+    return dict(response.info())
+
+
 def save_last_station(station):
+    """
+    Save radio url to file
+    :param station: str. radio stream url
+    """
     with open(SAVED_STATION, 'w') as f:
         f.write(station)
+    LOG.debug("Saved station url to file")
 
 
 def signal_exit_program(sig_nr, *args):
@@ -66,6 +92,7 @@ def signal_exit_program(sig_nr, *args):
     :param sig_nr: int
     """
     LOG.debug("Signal received %s. Exit radio program", sig_nr)
+    SystemExit(0)
 
 
 if __name__ == '__main__':
