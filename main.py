@@ -5,13 +5,15 @@ import vlc
 import urllib.request
 
 SAVED_STATION = 'last_station.txt'
-RADIO = [
-        'http://icecast.vrtcdn.be/klara-high.mp3',
+RADIO = (
+        'http://icecast.vrtcdn.be/radio1-high.mp3',
         'http://icecast.vrtcdn.be/ra2ant-high.mp3',
         'http://icecast.vrtcdn.be/klara-high.mp3',
         'http://icecast.vrtcdn.be/klaracontinuo-high.mp3',
+        'https://radios.rtbf.be/laprem1ere-128.mp3',
+        'https://radios.rtbf.be/musiq3-128.mp3',
         'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'
-    ]
+)
 
 # ### Logging config ###
 LEVEL = logging.DEBUG
@@ -40,7 +42,7 @@ def main():
     except FileNotFoundError:
         station = get_next_station()
         save_last_station(station)
-
+    # TODO use urllib.request.build_opener() object to listen to metadata
     media = instance.media_new(station)
     player.set_media(media)
     player.play()
@@ -70,8 +72,7 @@ def get_radio_metadata(url):
     :return: dict with icy metadata
     """
     LOG.debug("Getting metadata")
-    request = urllib.request.Request(url)
-    request.add_header("icy-metadata", 1)
+    request = urllib.request.Request(url, headers={"icy-metadata": "1"})
     response = urllib.request.urlopen(request, timeout=6)
     return dict(response.info())
 
