@@ -3,13 +3,15 @@ import logging
 import signal
 import vlc
 import urllib.request
+import icyparser
 
 SAVED_STATION = 'last_station.txt'
 RADIO = (
-        'http://icecast.vrtcdn.be/radio1-high.mp3',
-        'http://icecast.vrtcdn.be/ra2ant-high.mp3',
-        'http://icecast.vrtcdn.be/klara-high.mp3',
-        'http://icecast.vrtcdn.be/klaracontinuo-high.mp3',
+        'http://icecast.vrtcdn.be/radio1.aac',
+        'http://icecast.vrtcdn.be/radio1_classics.aac',
+        'http://icecast.vrtcdn.be/ra2ant.aac',
+        'http://icecast.vrtcdn.be/klara.aac',
+        'http://icecast.vrtcdn.be/klaracontinuo.aac',
         'https://radios.rtbf.be/laprem1ere-128.mp3',
         'https://radios.rtbf.be/musiq3-128.mp3',
         'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'
@@ -42,11 +44,15 @@ def main():
     except FileNotFoundError:
         station = get_next_station()
         save_last_station(station)
-    # TODO use urllib.request.build_opener() object to listen to metadata
+
+    # todo -> try the icyparser fro the metadata
+    icy = icyparser.IcyParser()
+    icy.get_icy_information(RADIO[0])
+
+    station = RADIO[1]  # DEBUG
     media = instance.media_new(station)
     player.set_media(media)
     player.play()
-    vlc.libvlc_media_parse(media)
 
     while True:  # todo -> btn 'stop' || btn 'next' == False
         pass
