@@ -1,11 +1,18 @@
 #!/usr/bin/python3
+"""
+Script to play radio streams on a raspberrypi.
+Controlled by two buttons. 1 to play next station and 1 to stop playing
+I should be runned as a systemd service.
+For playing the media the script uses the python-mpv module to interact with mpv player.
+A small display is used to show the current played track
+Sources:
+    radio stream url's: https://hendrikjansen.nl/henk/streaming1.html#wl
+    python-mpv: https://github.com/jaseg/python-mpv
+"""
 import logging
 import signal
-import vlc
-import urllib.request
-import icyparser
+import mpv
 
-SAVED_STATION = 'last_station.txt'
 RADIO = (
         'http://icecast.vrtcdn.be/radio1.aac',
         'http://icecast.vrtcdn.be/radio1_classics.aac',
@@ -13,9 +20,10 @@ RADIO = (
         'http://icecast.vrtcdn.be/klara.aac',
         'http://icecast.vrtcdn.be/klaracontinuo.aac',
         'https://radios.rtbf.be/laprem1ere-128.mp3',
-        'https://radios.rtbf.be/musiq3-128.mp3',
+        'https://radios.rtbf.be/musiq3-128.aac',
         'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'
 )
+SAVED_STATION = 'last_station.txt'
 
 # ### Logging config ###
 LEVEL = logging.DEBUG
@@ -36,8 +44,7 @@ LOG.setLevel(LEVEL)
 def main():
     """Main loop"""
     LOG.debug("start radio")
-    instance = vlc.Instance()
-    player = instance.media_player_new()
+    player = mpv.MPV()
     try:
         with open(SAVED_STATION, 'r') as f:
             station = f.readline()
@@ -45,16 +52,10 @@ def main():
         station = get_next_station()
         save_last_station(station)
 
-    # todo -> try the icyparser fro the metadata
-    icy = icyparser.IcyParser()
-    icy.get_icy_information(RADIO[0])
+    station = RADIO[6]  # DEBUG
+    player.play(station)
 
-    station = RADIO[1]  # DEBUG
-    media = instance.media_new(station)
-    player.set_media(media)
-    player.play()
-
-    while True:  # todo -> btn 'stop' || btn 'next' == False
+    while True:  # todo -> btn 'stop' || btn 'next' == False. update metadate with interval
         pass
 
 
@@ -71,16 +72,14 @@ def get_next_station(current_station=RADIO[-1]):
         return RADIO[RADIO.index(current_station) + 1]
 
 
-def get_radio_metadata(url):
+def get_radio_metadata(player):
     """
     Get icy-data from radio station
-    :param url: str. Stream url
-    :return: dict with icy metadata
+    :param player: python-mpv.MPV.
+    :return: dict with metadata
     """
     LOG.debug("Getting metadata")
-    request = urllib.request.Request(url, headers={"icy-metadata": "1"})
-    response = urllib.request.urlopen(request, timeout=6)
-    return dict(response.info())
+    return player.metadata
 
 
 def save_last_station(station):
@@ -103,7 +102,7 @@ def signal_exit_program(sig_nr, *args):
 
 
 if __name__ == '__main__':
-    signal.signal(signal.SIGINT, signal_exit_program)
+    signal.signal(signal.SIGINT, signal_exit_program)  # todo what?
     signal.signal(signal.SIGTERM, signal_exit_program)
     signal.signal(signal.SIGHUP, signal_exit_program)
     main()
