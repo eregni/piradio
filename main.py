@@ -41,20 +41,29 @@ LOG.setLevel(LEVEL)
 # ### End logging config ###
 
 
+def my_log(loglevel, component, message):
+    """Log handler for the python-mpv.MPV instance"""
+    print('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
+
+
 def main():
     """Main loop"""
     LOG.debug("start radio")
-    player = mpv.MPV()
+    player = mpv.MPV(log_handler=my_log)
+    player.set_loglevel('info')
+
     try:
         with open(SAVED_STATION, 'r') as f:
             station = f.readline()
     except FileNotFoundError:
         station = get_next_station()
         save_last_station(station)
+    player.playlist_clear()
 
-    station = RADIO[6]  # DEBUG
-    player.play(station)
+    for url in RADIO:
+        player.playlist_append(url)
 
+    player.playlist_play_index(0)
     while True:  # todo -> btn 'stop' || btn 'next' == False. update metadate with interval
         pass
 
@@ -65,11 +74,13 @@ def get_next_station(current_station=RADIO[-1]):
     :param current_station: list with station url's
     :return: str. Radio url
     """
-    LOG.debug("Getting next station")
     if current_station == RADIO[-1]:
-        return RADIO[0]
+        radio = RADIO[0]
     else:
-        return RADIO[RADIO.index(current_station) + 1]
+        radio = RADIO[RADIO.index(current_station) + 1]
+
+    LOG.info("Getting next station: {}".format(radio))
+    return radio
 
 
 def get_radio_metadata(player):
@@ -97,12 +108,13 @@ def signal_exit_program(sig_nr, *args):
     handler for SIGINT, SIGTERM, SIGHUP
     :param sig_nr: int
     """
+
     LOG.debug("Signal received %s. Exit radio program", sig_nr)
     SystemExit(0)
 
 
 if __name__ == '__main__':
-    signal.signal(signal.SIGINT, signal_exit_program)  # todo what?
+    signal.signal(signal.SIGINT, signal_exit_program)
     signal.signal(signal.SIGTERM, signal_exit_program)
     signal.signal(signal.SIGHUP, signal_exit_program)
     main()
