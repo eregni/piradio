@@ -5,13 +5,34 @@ Controlled by two buttons. 1 to play next station and 1 to start/stop playing
 It should be runned as a systemd service.
 For playing the media the script uses the python-mpv module to interact with mpv player.
 A small display is used to show the current played track.
-Sources:
+
+Usefull sources:
     radio stream url's: https://hendrikjansen.nl/henk/streaming1.html#wl
     python-mpv: https://github.com/jaseg/python-mpv
+    audiophonics sabre dac v3: https://www.audiophonics.fr/en/index.php?controller=attachment&id_attachment=208
+        THERE IS AN ERROR WITH THE NUMBERING OF THE PINS IN THE DAC DOCUMENTATION.
+        HALFWAY, IT SWITCHES FROM BCM TO PHYSICAL NUMBERING
+        the dac occupies the following rpi pins (bcm numbering):
+            4, 17, 22 (software shutdown, button shutdown, bootOk)
+            14, 15 (uart)
+            18, 19, 21 (dac audio, DOCUMENTATION REFERS TO PHYSICAL PIN NRS 12, 35, 40)
+            TODO: check these pins on the pcb
+The raspberrypi needs following packages (arch linux):
+    mpv
+    alsa-utils
+    python-raspberry-gpio (from AUR -> yay is a usefull program to install aur packages)
+
+enable spi/i2c: "device_tree_param=spi=on"/"dtparam=i2c_arm=on" -> /boot/config.txt
+
+python modules:
+    python-mpv
+    gpiozero
 """
 import logging
 import signal
 import mpv
+# todo gpiozero without root??? or pigpio???
+# from gpiozero import Button
 
 RADIO = (
         'http://icecast.vrtcdn.be/radio1.aac',
@@ -74,9 +95,13 @@ def main():
         if btn_next:
             player.playlist_next()
             save_last_station(player)
-        if current_playing != player.metadata['icy-title']:
-            update_metadata(player)
-            current_playing = player.metadata['icy-title']
+        try:
+            if current_playing != player.metadata['icy-title']:
+                update_metadata(player)
+                current_playing = player.metadata['icy-title']
+        except (TypeError, KeyError):
+            LOG.debug("No (icy) metadata available")
+            pass
 
 
 def update_metadata(player: mpv.MPV) -> None:
@@ -107,7 +132,7 @@ def get_saved_station() -> int:
     return index
 
 
-def save_last_station(player: mpv.MPV):
+def save_last_station(player: mpv.MPV) -> None:
     """
     Save station playlist index to file
     :param player: python-mpv MPV instance
