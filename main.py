@@ -16,7 +16,8 @@ Usefull sources:
             4, 17, 22 (software shutdown, button shutdown, bootOk)
             14, 15 (uart)
             18, 19, 21 (dac audio, DOCUMENTATION REFERS TO PHYSICAL PIN NRS 12, 35, 40)
-            TODO: check these pins on the pcb
+            pin 24, 25 for radio stream buttons (todo -> probably change to pin 14, 15
+            TODO: check these pins on the pcb for the lcd
 The raspberrypi needs following packages (arch linux):
     mpv
     alsa-utils
@@ -30,9 +31,8 @@ python modules:
 """
 import logging
 import signal
+import gpiozero
 import mpv
-# todo gpiozero without root??? or pigpio???
-# from gpiozero import Button
 
 RADIO = (
         'http://icecast.vrtcdn.be/radio1.aac',
@@ -45,6 +45,8 @@ RADIO = (
         'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'
 )
 SAVED_STATION = 'last_station.txt'
+BTN1_PIN = 25
+BTN2_PIN = 24
 
 # ### Logging config ###
 LEVEL = logging.DEBUG
@@ -69,11 +71,24 @@ def my_log(loglevel, component, message):
 
 def main():
     """Main loop"""
-    btn_toggle = False
-    btn_next = False
-    LOG.info("start radio")
     player = mpv.MPV(log_handler=my_log)
     player.set_loglevel('error')
+
+    def btn_toggle_handler():
+        if player.is_playing:
+            player.stop()
+        else:
+            player.playlist_play_index(player.playlist_current_pos)
+
+    def btn_next_handler():
+        player.playlist_next()
+        save_last_station(player)
+
+    LOG.info("start radio")
+    btn_toggle = gpiozero.Button(BTN1_PIN, pull_up=True, bounce_time=0.1)
+    btn_toggle.when_pressed = btn_toggle_handler
+    btn_next = gpiozero.Button(BTN2_PIN, pull_up=True, bounce_time=0.1)
+    btn_next.when_pressed = btn_next_handler
 
     index = get_saved_station()
     player.playlist_clear()
@@ -82,27 +97,18 @@ def main():
         player.playlist_append(url)
 
     player.playlist_play_index(index)
-    playing = True
     current_playing = ""
 
     while True:  # todo -> btn 'stop' || btn 'next' == False. update metadata with interval
-        if btn_toggle:
-            playing = not playing
-            if playing:
-                player.stop()
-            else:
-                player.playlist_play_index(player.playlist_current_pos)
-        if btn_next:
-            player.playlist_next()
-            save_last_station(player)
+        pass
         try:
             if current_playing != player.metadata['icy-title']:
                 update_metadata(player)
                 current_playing = player.metadata['icy-title']
+                print("Current playlist index: {}".format(player.playlist_current_pos))
         except (TypeError, KeyError):
             LOG.debug("No (icy) metadata available")
             pass
-
 
 def update_metadata(player: mpv.MPV) -> None:
     """
@@ -112,6 +118,8 @@ def update_metadata(player: mpv.MPV) -> None:
     # todo: choose hardware...
     name = player.metadata['icy-name']
     title = player.metadata['icy-title']
+    if LEVEL == logging.DEBUG:
+        print("icy-name: {}\nicy-title: {}".format(name, title))
     LOG.debug("New metadata: {} {}".format(name, title))
 
 
