@@ -3,7 +3,7 @@
 Script to play radio streams on a raspberrypi pimped with an audiophonics sabre dac v3
 Controlled by two buttons. 1 to play next station and 1 to start/stop playing
 It should be runned as a systemd service.
-A small display is used to show the current played track.   # todo: choose hardware...
+A small display is used to show the current played track.
 
 Usefull sources:
     arch arm config: https://archlinuxarm.org/platforms/armv7/broadcom/raspberry-pi-2
@@ -39,12 +39,16 @@ drivers:
     enable sabre dac: "dtoverlay=hifiberry-dac" -> /boot/config.txt
 
 the user needs to be in the 'audio' group
-todo: choose mpv volume -> volume=[0-100] (default 100) -> mpv.conf
 """
 import logging
 import signal
-import gpiozero
+import time
+
+from gpiozero import Button
 import mpv
+from datetime import datetime
+
+# Config ################################################################################
 AUDIO_DEVICE = 'alsa/default:CARD=sndrpihifiberry'
 RADIO = (
         'http://icecast.vrtcdn.be/radio1.aac',
@@ -59,9 +63,10 @@ RADIO = (
 SAVED_STATION = 'last_station.txt'
 BTN1_PIN = 25
 BTN2_PIN = 24
+# End config ################################################################################
 
-# ### Logging config ###
-LEVEL = logging.DEBUG
+# Logging config ##############################################################################
+LOG_LEVEL = logging.DEBUG
 LOG_FORMATTER = logging.Formatter(
     fmt='[%(asctime)s.%(msecs)03d] [%(module)s] %(levelname)s: %(message)s',
     datefmt='%D %H:%M:%S',
@@ -69,59 +74,21 @@ LOG_FORMATTER = logging.Formatter(
 LOG_FORMATTER.default_msec_format = '%s.%03d'
 LOG_HANDLER = logging.FileHandler(filename='piradio.log')
 LOG_HANDLER.setFormatter(LOG_FORMATTER)
-LOG_HANDLER.setLevel(LEVEL)
+LOG_HANDLER.setLevel(LOG_LEVEL)
 LOG = logging.getLogger()
 LOG.addHandler(LOG_HANDLER)
-LOG.setLevel(LEVEL)
-# ### End logging config ###
+LOG.setLevel(LOG_LEVEL)
+# End logging config #######################################################################
 
 
 def my_log(loglevel, component, message):
     """Log handler for the python-mpv.MPV instance. It just prints the log message"""
-    if LEVEL == logging.DEBUG:
+    if LOG_LEVEL == logging.DEBUG:
         print('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
 
 
-def main():
-    """Main loop"""
-    player = mpv.MPV(log_handler=my_log, audio_device=AUDIO_DEVICE)
-    player.set_loglevel('error')
-
-    def btn_toggle_handler():
-        if player.is_playing:
-            player.stop()
-        else:
-            player.playlist_play_index(player.playlist_current_pos)
-
-    def btn_next_handler():
-        player.playlist_next()
-        save_last_station(player)
-
-    LOG.info("start radio")
-    btn_toggle = gpiozero.Button(BTN1_PIN, pull_up=True, bounce_time=0.1)
-    btn_toggle.when_pressed = btn_toggle_handler
-    btn_next = gpiozero.Button(BTN2_PIN, pull_up=True, bounce_time=0.1)
-    btn_next.when_pressed = btn_next_handler
-
-    index = get_saved_station()
-    player.playlist_clear()
-    player.loop_playlist = True
-    for url in RADIO:
-        player.playlist_append(url)
-
-    player.playlist_play_index(index)
-    current_playing = ""
-
-    while True:  # todo -> btn 'stop' || btn 'next' == False. update metadata with interval
-        pass
-        try:
-            if current_playing != player.metadata['icy-title']:
-                update_metadata(player)
-                current_playing = player.metadata['icy-title']
-                print("Current playlist index: {}".format(player.playlist_current_pos))
-        except (TypeError, KeyError):
-            LOG.debug("No (icy) metadata available")
-            pass
+PLAYER = mpv.MPV(log_handler=my_log, audio_device=AUDIO_DEVICE)
+PLAYER.set_loglevel('error')
 
 
 def update_metadata(player: mpv.MPV) -> None:
@@ -131,7 +98,7 @@ def update_metadata(player: mpv.MPV) -> None:
     """
     name = player.metadata['icy-name']
     title = player.metadata['icy-title']
-    if LEVEL == logging.DEBUG:
+    if LOG_LEVEL == logging.DEBUG:
         print("icy-name: {}\nicy-title: {}".format(name, title))
     LOG.debug("New metadata: {} {}".format(name, title))
 
@@ -168,12 +135,49 @@ def signal_exit_program(sig_nr, *args):
     handler for SIGINT, SIGTERM, SIGHUP
     :param sig_nr: int
     """
+    PLAYER.quit()
     LOG.info("Signal received %s. Exit radio program", sig_nr)
-    SystemExit(0)
+    SystemExit()
 
 
-if __name__ == '__main__':
-    signal.signal(signal.SIGINT, signal_exit_program)
-    signal.signal(signal.SIGTERM, signal_exit_program)
-    signal.signal(signal.SIGHUP, signal_exit_program)
-    main()
+def btn_toggle_handler():
+    LOG.debug("Btn toggle pressed at {0}".format(datetime.now().strftime("%H:%M:%S")))
+    # playing = not playing
+    # player.playlist_play_index(player.playlist_current_pos) if not playing else player.stop()
+
+
+def btn_next_handler():
+    LOG.debug("Btn next pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
+    # player.playlist_next()
+    # save_last_station(player)
+
+
+signal.signal(signal.SIGINT, signal_exit_program)
+signal.signal(signal.SIGTERM, signal_exit_program)
+signal.signal(signal.SIGHUP, signal_exit_program)
+
+LOG.info("start radio")
+btn_toggle = Button(BTN1_PIN, pull_up=True, bounce_time=0.1)
+btn_toggle.when_pressed = btn_toggle_handler
+btn_next = Button(BTN2_PIN, pull_up=True, bounce_time=0.1)
+btn_next.when_pressed = btn_next_handler
+
+PLAYER.playlist_clear()
+PLAYER.loop_playlist = True
+for url in RADIO:
+    PLAYER.playlist_append(url)
+
+PLAYER.playlist_play_index(get_saved_station())
+playing = True
+current_playing = ""
+
+while True:
+    try:
+        if playing and current_playing != PLAYER.metadata['icy-title']:
+            update_metadata(PLAYER)
+            current_playing = PLAYER.metadata['icy-title']
+            print("Current playlist index: {}".format(PLAYER.playlist_current_pos))
+    except (TypeError, KeyError):
+        LOG.debug("No (icy) metadata available")
+
+    time.sleep(0.001)
