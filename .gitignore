@@ -2,3 +2,4 @@
 last_station.txt
 piradio.log
 __pycache__
+.venv/

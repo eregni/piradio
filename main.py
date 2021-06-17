@@ -22,10 +22,13 @@ The raspberrypi needs following packages (arch linux):
     mpv
     alsa-utils
     python-raspberry-gpio (from AUR -> yay is a usefull program to install aur packages)
+    lm_sensors
+    i2c-tools
 
 python modules (use pip to install):
     python-mpv
     gpiozero
+    smbus
 
 gpio permissions:
     create file '99-gpio.rules' in /etc/udev/rules.d/ and add following config:
@@ -39,14 +42,24 @@ drivers:
     enable sabre dac: "dtoverlay=hifiberry-dac" -> /boot/config.txt
 
 the user needs to be in the 'audio' group
+
+i2c group and permission settings (https://arcanesciencelab.wordpress.com/2014/02/02/bringing-up-i2c-on-the-raspberry-pi-with-arch-linux/)
+    # groupadd i2c
+    # usermod -aG i2c [myusername]
+    # echo 'KERNEL=="i2c-[0-9]*", GROUP="i2c"' >> /etc/udev/rules.d/raspberrypi.rules
 """
+# todo solder transistor to control the power supply of the lcd
+
 import logging
-import signal
+import atexit
 import time
+from sys import exit
+import textwrap
 
 from gpiozero import Button
 import mpv
 from datetime import datetime
+from i2c_dev import Lcd
 
 # Config ################################################################################
 AUDIO_DEVICE = 'alsa/default:CARD=sndrpihifiberry'
@@ -72,35 +85,42 @@ LOG_FORMATTER = logging.Formatter(
     datefmt='%D %H:%M:%S',
 )
 LOG_FORMATTER.default_msec_format = '%s.%03d'
-LOG_HANDLER = logging.FileHandler(filename='piradio.log')
-LOG_HANDLER.setFormatter(LOG_FORMATTER)
-LOG_HANDLER.setLevel(LOG_LEVEL)
+LOG_HANDLER_FILE = logging.FileHandler(filename='piradio.log')
+LOG_HANDLER_FILE.setFormatter(LOG_FORMATTER)
+LOG_HANDLER_FILE.setLevel(LOG_LEVEL)
+# todo stream logger not printing to console
+LOG_HANDLER_CONSOLE = logging.StreamHandler()
+LOG_HANDLER_CONSOLE.setFormatter(LOG_FORMATTER)
+LOG_HANDLER_CONSOLE.setLevel(LOG_LEVEL)
 LOG = logging.getLogger()
-LOG.addHandler(LOG_HANDLER)
+LOG.addHandler(LOG_HANDLER_FILE)
 LOG.setLevel(LOG_LEVEL)
 # End logging config #######################################################################
 
 
-def my_log(loglevel, component, message):
-    """Log handler for the python-mpv.MPV instance. It just prints the log message"""
-    if LOG_LEVEL == logging.DEBUG:
-        print('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
+def mpv_log(loglevel, component, message):
+    """Log handler for the python-mpv.MPV instance"""
+    LOG.debug('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
 
 
-PLAYER = mpv.MPV(log_handler=my_log, audio_device=AUDIO_DEVICE)
+PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
 PLAYER.set_loglevel('error')
+LCD = Lcd()
 
 
-def update_metadata(player: mpv.MPV) -> None:
+def lcd_update(text: str) -> None:
     """
     Send metadata to lcd screen
-    :param player: python-mpv MPV instance
+    :param text: str to display on lcd. If the string is longer than 16 chars if will be wrapped upon two lines
     """
-    name = player.metadata['icy-name']
-    title = player.metadata['icy-title']
-    if LOG_LEVEL == logging.DEBUG:
-        print("icy-name: {}\nicy-title: {}".format(name, title))
-    LOG.debug("New metadata: {} {}".format(name, title))
+    text = textwrap.wrap(text, 16)
+    LCD.lcd_clear()
+    try:
+        LCD.lcd_display_string(text[0], 1)
+        if len(text) > 1:
+            LCD.lcd_display_string(text[1], 2)
+    except IndexError:
+        LOG.warning("Problem while sending text to the lcd screen")
 
 
 def get_saved_station() -> int:
@@ -119,7 +139,7 @@ def get_saved_station() -> int:
 
     return index
 
-
+# todo: use constants instead of parameters. (No OO programing here)
 def save_last_station(player: mpv.MPV) -> None:
     """
     Save station playlist index to file
@@ -130,16 +150,17 @@ def save_last_station(player: mpv.MPV) -> None:
     LOG.debug("Saved station playlist index to file")
 
 
-def signal_exit_program(sig_nr, *args):
+def signal_exit_program():
     """
-    handler for SIGINT, SIGTERM, SIGHUP
-    :param sig_nr: int
+    handler for atexit
     """
+    LOG.info("Atexit handler triggered. Exit program")
+    LCD.lcd_clear()
+    PLAYER.stop()
     PLAYER.quit()
-    LOG.info("Signal received %s. Exit radio program", sig_nr)
-    SystemExit()
+    exit(0)
 
-
+# Todo: button handling
 def btn_toggle_handler():
     LOG.debug("Btn toggle pressed at {0}".format(datetime.now().strftime("%H:%M:%S")))
     # playing = not playing
@@ -152,9 +173,7 @@ def btn_next_handler():
     # save_last_station(player)
 
 
-signal.signal(signal.SIGINT, signal_exit_program)
-signal.signal(signal.SIGTERM, signal_exit_program)
-signal.signal(signal.SIGHUP, signal_exit_program)
+atexit.register(signal_exit_program)
 
 LOG.info("start radio")
 btn_toggle = Button(BTN1_PIN, pull_up=True, bounce_time=0.1)
@@ -169,15 +188,27 @@ for url in RADIO:
 
 PLAYER.playlist_play_index(get_saved_station())
 playing = True
+current_station = ""
 current_playing = ""
+lcd_lock = time.time()
 
 while True:
     try:
-        if playing and current_playing != PLAYER.metadata['icy-title']:
-            update_metadata(PLAYER)
+        # todo scroll text if necessary
+        if playing and current_station != PLAYER.metadata['icy-name']:
+            current_station =PLAYER.metadata['icy-name']
+            LOG.debug(f"New icy-name: {current_station}")
+            lcd_update(current_station)
+            lcd_lock = time.time()
+        elif playing and current_playing != PLAYER.metadata['icy-title'] and time.time() - lcd_lock > 5:
             current_playing = PLAYER.metadata['icy-title']
-            print("Current playlist index: {}".format(PLAYER.playlist_current_pos))
+            LOG.debug(f"New icy-title: {current_playing}")
+            lcd_update(current_playing)
     except (TypeError, KeyError):
         LOG.debug("No (icy) metadata available")
+    except mpv.ShutdownError:
+        LOG.debug("ShutdownError")
+        LCD.lcd_clear()
+        exit(0)
 
-    time.sleep(0.001)
+    time.sleep(0.001)  # 10 times less cpu usage

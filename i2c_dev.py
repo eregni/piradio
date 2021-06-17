@@ -1,13 +1,14 @@
+#  SOURCE: https://github.com/the-raspberry-pi-guy/lcd.git
+
 from smbus import SMBus
 from RPi.GPIO import RPI_REVISION
 from time import sleep
-from re import findall
-from subprocess import check_output
-from os.path import exists
 
 # old and new versions of the RPi have swapped the two i2c buses
 # they can be identified by RPI_REVISION (or check sysfs)
 BUS_NUMBER = 0 if RPI_REVISION == 1 else 1
+
+ADDR = 0x27  # SET THE I2C ADDRESS HERE
 
 # other commands
 LCD_CLEARDISPLAY = 0x01
@@ -57,17 +58,8 @@ Rs = 0b00000001  # Register select bit
 
 
 class I2CDevice:
-    def __init__(self, addr=None, addr_default=None, bus=BUS_NUMBER):
-        if not addr:
-            # try autodetect address, else use default if provided
-            try:
-                self.addr = int('0x{}'.format(
-                    findall("[0-9a-z]{2}(?!:)", check_output(['/usr/sbin/i2cdetect', '-y', BUS_NUMBER]))[0]), base=16) \
-                    if exists('/usr/sbin/i2cdetect') else addr_default
-            except:
-                self.addr = addr_default
-        else:
-            self.addr = addr
+    def __init__(self, addr=None, bus=BUS_NUMBER):
+        self.addr = addr
         self.bus = SMBus(bus)
 
     # write a single command
@@ -100,7 +92,7 @@ class I2CDevice:
 
 class Lcd:
     def __init__(self):
-        self.lcd = I2CDevice(addr_default=0x27)
+        self.lcd = I2CDevice(addr=ADDR)
         self.lcd_write(0x03)
         self.lcd_write(0x03)
         self.lcd_write(0x03)
