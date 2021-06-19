@@ -54,6 +54,8 @@ i2c speed
 # todo profiling and optimization
 # todo solder transistor to control the power supply of the lcd
 # todo check header soldering
+# todo add bash code to poll on/off pin
+# todo add pullups to i2c lines???
 
 import logging
 import atexit
@@ -131,7 +133,7 @@ def get_saved_station() -> int:
     try:
         with open(SAVED_STATION, 'r') as f:
             index = int(f.readline())
-        LOG.info(f"Retrieving saved last radio: {RADIO[index][0]}")
+        LOG.debug(f"Retrieving saved last radio: {RADIO[index][0]}")
     except (FileNotFoundError, BaseException):
         index = 0
         LOG.warning("Error while reading saved playlist index nr. Getting first item in playlist instead")
@@ -158,7 +160,7 @@ def exit_program():
 
 def display_radio_name():
     """Display radio name"""
-    global LCD_SCROLL, CURRENT_STATION
+    global CURRENT_STATION
     if PLAYER.metadata['icy-name'] == '':  # some stations give an empty str
         raise KeyError
     LCD.lcd_clear()
@@ -172,8 +174,7 @@ def display_radio_name():
 
 def display_icy_title():
     """Display icy-title. Activate scrolling when there are more than 2 lines to be displayed"""
-    global LCD_SCROLL, SCROLL_TEXT, CURRENT_PLAYING
-    LCD_SCROLL = False
+    global CURRENT_PLAYING
     CURRENT_PLAYING = PLAYER.metadata['icy-title']
     if CURRENT_PLAYING == "":
         return
@@ -225,21 +226,22 @@ PLAYER.playlist_play_index(get_saved_station())
 PLAYER.wait_until_playing()
 LOG.info("Radio stream started")
 
-
+# todo metadata (icy-title) is cut off at +-30 chars
 while True:
     try:
         if LCD_SCROLL and time.time() - SCROLL_LOCK > 0.5:
             SCROLL_LOCK = time.time()
-            display_scroll_text()
-            # add one second delay at start and end of the text line. Otherwise it's harder to read
             if SCROLL_INDEX == 0 or SCROLL_INDEX == len(SCROLL_TEXT) - 16:
+                # add one second delay at start and end of the text line. Otherwise it's harder to read
                 SCROLL_LOCK += 1
+            display_scroll_text()
+
         if CURRENT_STATION != PLAYER.metadata['icy-name']:
-            LCD_SCROLL = False
+            LCD_SCROLL, SCROLL_TEXT = False, 0
             display_radio_name()
             LCD_LOCK = time.time()
         if CURRENT_PLAYING != PLAYER.metadata['icy-title'] and time.time() - LCD_LOCK > 5:
-            LCD_SCROLL = False
+            LCD_SCROLL, SCROLL_TEXT = False, 0
             display_icy_title()
 
     except (IndexError, KeyError):
@@ -254,7 +256,7 @@ while True:
     except TypeError:
         pass  # triggered when switching stations. PLAYER.metadata needs to be updated from mpv thead
     except mpv.ShutdownError:
-        LOG.warning("ShutdownError")
+        LOG.error("ShutdownError from mpv")
         exit_program()
 
     time.sleep(0.001)  # 10 times less cpu usage
