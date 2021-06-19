@@ -51,8 +51,9 @@ i2c group and permission settings (https://arcanesciencelab.wordpress.com/2014/0
 i2c speed
     dtparam=i2c_arm=on,i2c_arm_baudrate=400000 -> /boot/config.txt
 """
-# todo create script to start/stop this thing as a systemd service
+# todo profiling and optimization
 # todo solder transistor to control the power supply of the lcd
+# todo check header soldering
 
 import logging
 import atexit
@@ -68,21 +69,21 @@ from i2c_dev import Lcd
 # Config ################################################################################
 AUDIO_DEVICE = 'alsa/default:CARD=sndrpihifiberry'
 RADIO = (
-        'http://icecast.vrtcdn.be/radio1.aac',
-        'http://icecast.vrtcdn.be/radio1_classics.aac',
-        'http://icecast.vrtcdn.be/ra2ant.aac',
-        'http://icecast.vrtcdn.be/klara.aac',
-        'http://icecast.vrtcdn.be/klaracontinuo.aac',
-        'https://radios.rtbf.be/laprem1ere-128.mp3',  # aac not available in 128 bit quality for now
-        'https://radios.rtbf.be/musiq3-128.aac',
-        'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'
+    ('Radio1', 'http://icecast.vrtcdn.be/radio1.aac'),
+    ('Radio1 Classics', 'http://icecast.vrtcdn.be/radio1_classics.aac'),
+    ('Radio2', 'http://icecast.vrtcdn.be/ra2ant.aac'),
+    ('Klara', 'http://icecast.vrtcdn.be/klara.aac'),
+    ('Klara Continuo', 'http://icecast.vrtcdn.be/klaracontinuo.aac'),
+    ('La premiere', 'https://radios.rtbf.be/laprem1ere-128.mp3'),  # aac not available in 128 bit quality for now
+    ('Musique 3', 'https://radios.rtbf.be/musiq3-128.aac'),
+    ('Vrt NWS', 'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3')
 )
 SAVED_STATION = 'last_station.txt'
 BTN1_PIN = 25
 # End config ################################################################################
 
 # Logging config ############################################################################
-LOG_LEVEL = logging.INFO
+LOG_LEVEL = logging.DEBUG
 LOG_FORMATTER = logging.Formatter(
     fmt='[%(asctime)s.%(msecs)03d] [%(module)s] %(levelname)s: %(message)s',
     datefmt='%D %H:%M:%S',
@@ -96,27 +97,29 @@ LOG_HANDLER_CONSOLE.setFormatter(LOG_FORMATTER)
 LOG_HANDLER_CONSOLE.setLevel(LOG_LEVEL)
 LOG = logging.getLogger()
 LOG.addHandler(LOG_HANDLER_FILE)
-LOG.addHandler(LOG_HANDLER_CONSOLE)
+if LOG_LEVEL == logging.DEBUG:
+    LOG.addHandler(LOG_HANDLER_CONSOLE)
 LOG.setLevel(LOG_LEVEL)
 # End logging config #######################################################################
 
 
 def mpv_log(loglevel, component, message):
     """Log handler for the python-mpv.MPV instance"""
-    LOG.debug('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
+    LOG.warning('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
 
 
 # Global vars
 PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
 PLAYER.set_loglevel('error')
 LCD = Lcd()
-CURRENT_STATION = ""
+CURRENT_STATION = "-"  # if the icy-name is empty make the program use the name from the RADIO list
 CURRENT_PLAYING = ""
 LCD_LOCK = time.time()
 LCD_SCROLL = False
 SCROLL_INDEX = 0
 SCROLL_TEXT = ""
-BTN_NEXT = Button(BTN1_PIN, pull_up=True, bounce_time=0.1)
+SCROLL_LOCK = time.time()
+BTN_NEXT = Button(BTN1_PIN, pull_up=True, bounce_time=0.05)
 # ##########################################################################################
 
 
@@ -128,28 +131,23 @@ def get_saved_station() -> int:
     try:
         with open(SAVED_STATION, 'r') as f:
             index = int(f.readline())
-        LOG.debug("Retrieving saved index nr: {}".format(index))
+        LOG.info(f"Retrieving saved last radio: {RADIO[index][0]}")
     except (FileNotFoundError, BaseException):
         index = 0
-        LOG.warning("Error while reading saved playlist index nr. "
-                    "Getting first item in playlist instead")
+        LOG.warning("Error while reading saved playlist index nr. Getting first item in playlist instead")
 
     return index
 
 
 def save_last_station() -> None:
-    """
-    Save station playlist index to file
-    """
+    """Save station playlist index to file"""
     with open(SAVED_STATION, 'w') as f:
         f.write(str(PLAYER.playlist_current_pos))
     LOG.debug("Saved station playlist index to file")
 
 
 def exit_program():
-    """
-    handler for atexit
-    """
+    """handler for atexit -> stop mpv player. clear lcd screen"""
     line = "#" * 75
     LOG.info(f"Atexit handler triggered. Exit program\n{line}\n")
     LCD.lcd_clear()
@@ -158,63 +156,103 @@ def exit_program():
     exit(0)
 
 
-# Todo: button handling
+def display_radio_name():
+    """Display radio name"""
+    global LCD_SCROLL, CURRENT_STATION
+    if PLAYER.metadata['icy-name'] == '':  # some stations give an empty str
+        raise KeyError
+    LCD.lcd_clear()
+    CURRENT_STATION = PLAYER.metadata['icy-name']
+    lines = textwrap.wrap(CURRENT_STATION, 16)
+    LCD.lcd_display_string(lines[0], 1)
+    LOG.debug(f"New icy-name: {CURRENT_STATION}")
+    if len(lines) > 1:
+        LCD.lcd_display_string(lines[1], 2)  # todo scroll text when len(lines) > 2 ???
+
+
+def display_icy_title():
+    """Display icy-title. Activate scrolling when there are more than 2 lines to be displayed"""
+    global LCD_SCROLL, SCROLL_TEXT, CURRENT_PLAYING
+    LCD_SCROLL = False
+    CURRENT_PLAYING = PLAYER.metadata['icy-title']
+    if CURRENT_PLAYING == "":
+        return
+    lines = textwrap.wrap(CURRENT_PLAYING, 16)
+    LCD.lcd_clear()
+    LCD.lcd_display_string(lines[0], 1)
+    LOG.debug(f"New icy-title: {CURRENT_PLAYING}")
+    if len(lines) == 2:
+        LCD.lcd_display_string(lines[1], 2)
+    elif len(lines) > 2:
+        set_up_scrolling(lines)
+
+
+def set_up_scrolling(lines: list[str]):
+    """Activate scrolling and set up the SCROLL_TEXT"""
+    global LCD_SCROLL, SCROLL_TEXT
+    LCD_SCROLL = True
+    scroll_lines = []
+    for i in range(1, len(lines)):
+        scroll_lines.append(lines[i])
+    SCROLL_TEXT = " ".join(scroll_lines)  # concat lines except the first item (is printed on line 1)
+
+
+def display_scroll_text():
+    """Display substring from SCROLL_TEXT"""
+    global SCROLL_INDEX, SCROLL_TEXT
+    LCD.lcd_display_string(SCROLL_TEXT[SCROLL_INDEX: SCROLL_INDEX + 16], 2)
+    SCROLL_INDEX = 0 if SCROLL_INDEX >= len(SCROLL_TEXT) - 16 else SCROLL_INDEX + 1
+
+
 def btn_next_handler():
-    LOG.debug("Btn next pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
-    # PLAYER.playlist_next()
-    # save_last_station(player)
+    """Handler -> play next radio station"""
+    global CURRENT_STATION
+    LOG.debug("Btn_next pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
+    PLAYER.playlist_next()
+    PLAYER.wait_until_playing()
+    save_last_station()
+    CURRENT_STATION = "-"
 
 
 BTN_NEXT.when_pressed = btn_next_handler
 atexit.register(exit_program)
-LOG.info("start radio")
 
 PLAYER.playlist_clear()
 PLAYER.loop_playlist = True
-for url in RADIO:
-    PLAYER.playlist_append(url)
-
+for item in RADIO:
+    PLAYER.playlist_append(item[1])
 PLAYER.playlist_play_index(get_saved_station())
+PLAYER.wait_until_playing()
+LOG.info("Radio stream started")
+
 
 while True:
     try:
-        # todo bug -> scrolling doesn't always stops at last char?
-        if LCD_SCROLL and time.time() - LCD_LOCK > 0.5:
-            LCD_LOCK = time.time()
-            LCD.lcd_display_string(SCROLL_TEXT[SCROLL_INDEX: SCROLL_INDEX + 16], 2)
-            # wait one second at start and end of the text line. Otherwise it's harder to read
+        if LCD_SCROLL and time.time() - SCROLL_LOCK > 0.5:
+            SCROLL_LOCK = time.time()
+            display_scroll_text()
+            # add one second delay at start and end of the text line. Otherwise it's harder to read
             if SCROLL_INDEX == 0 or SCROLL_INDEX == len(SCROLL_TEXT) - 16:
-                LCD_LOCK += 1
-            SCROLL_INDEX = 0 if SCROLL_INDEX == len(SCROLL_TEXT) - 16 else SCROLL_INDEX + 1
-
+                SCROLL_LOCK += 1
         if CURRENT_STATION != PLAYER.metadata['icy-name']:
             LCD_SCROLL = False
-            CURRENT_STATION = PLAYER.metadata['icy-name']
-            LOG.debug(f"New icy-name: {CURRENT_STATION}")
-            lines = textwrap.wrap(CURRENT_STATION, 16)
-            LCD.lcd_display_string(lines[0], 1)
-            if len(lines) > 1:
-                LCD.lcd_display_string(lines[1], 2)
+            display_radio_name()
             LCD_LOCK = time.time()
-
         if CURRENT_PLAYING != PLAYER.metadata['icy-title'] and time.time() - LCD_LOCK > 5:
             LCD_SCROLL = False
-            CURRENT_PLAYING = PLAYER.metadata['icy-title']
-            LOG.debug(f"New icy-title: {CURRENT_PLAYING}")
-            lines = textwrap.wrap(CURRENT_PLAYING, 16)
-            LCD.lcd_clear()
-            LCD.lcd_display_string(lines[0], 1)
-            if len(lines) == 2:
-                LCD.lcd_display_string(lines[1], 2)
-            elif len(lines) > 2:  # enable text scrolling
-                LCD_SCROLL = True
-                scroll_lines = []
-                for i in range(1, len(lines)):
-                    scroll_lines.append(lines[i])
-                SCROLL_TEXT = " ".join(scroll_lines)  # concat lines except the first item (is printed on line 1)
+            display_icy_title()
 
-    except (TypeError, KeyError):
-        pass  # no icy data...
+    except (IndexError, KeyError):
+        # no icy data. Just display the name from RADIO list if not already done so
+        # IndexError could be triggered when 'icy-name' == ''
+        # KeyError could be triggered when 'icy-title' doesn't exists
+        if CURRENT_STATION == "-":
+            CURRENT_STATION = RADIO[PLAYER.playlist_current_pos][0]
+            LCD.lcd_clear()
+            LCD.lcd_display_string(CURRENT_STATION, 1)
+            LOG.debug(f"New station (no icy data): {CURRENT_STATION}")
+    except TypeError:
+        pass  # triggered when switching stations. PLAYER.metadata needs to be updated from mpv thead
     except mpv.ShutdownError:
         LOG.warning("ShutdownError")
         exit_program()
