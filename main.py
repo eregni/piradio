@@ -2,7 +2,7 @@
 """
 Script to play radio streams on a raspberrypi pimped with an audiophonics sabre dac v3
 Controlled by two buttons. 1 to play next station and 1 to start/stop playing
-It should be runned as a systemd service.
+It runs as a systemd service and is started/stopped by polling a gpio pin in a separate bash script. (it's not the only pin being polled)
 A small display is used to show the current played track.
 
 Usefull sources:
@@ -79,7 +79,6 @@ RADIO = (
 )
 SAVED_STATION = 'last_station.txt'
 BTN1_PIN = 25
-BTN2_PIN = 24
 # End config ################################################################################
 
 # Logging config ############################################################################
@@ -101,9 +100,11 @@ LOG.addHandler(LOG_HANDLER_CONSOLE)
 LOG.setLevel(LOG_LEVEL)
 # End logging config #######################################################################
 
+
 def mpv_log(loglevel, component, message):
     """Log handler for the python-mpv.MPV instance"""
     LOG.debug('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
+
 
 # Global vars
 PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
@@ -113,6 +114,9 @@ CURRENT_STATION = ""
 CURRENT_PLAYING = ""
 LCD_LOCK = time.time()
 LCD_SCROLL = False
+SCROLL_INDEX = 0
+SCROLL_TEXT = ""
+BTN_NEXT = Button(BTN1_PIN, pull_up=True, bounce_time=0.1)
 # ##########################################################################################
 
 
@@ -132,10 +136,10 @@ def get_saved_station() -> int:
 
     return index
 
+
 def save_last_station() -> None:
     """
     Save station playlist index to file
-    :param player: python-mpv MPV instance
     """
     with open(SAVED_STATION, 'w') as f:
         f.write(str(PLAYER.playlist_current_pos))
@@ -147,32 +151,23 @@ def exit_program():
     handler for atexit
     """
     line = "#" * 75
-    LOG.info(f"Atexit handler triggered. Exit program{line}\n")
+    LOG.info(f"Atexit handler triggered. Exit program\n{line}\n")
     LCD.lcd_clear()
     PLAYER.stop()
     PLAYER.terminate()
     exit(0)
 
+
 # Todo: button handling
-def btn_toggle_handler():
-    LOG.debug("Btn toggle pressed at {0}".format(datetime.now().strftime("%H:%M:%S")))
-    # playing = not playing
-    # player.playlist_play_index(player.playlist_current_pos) if not playing else player.stop()
-
-
 def btn_next_handler():
     LOG.debug("Btn next pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
-    # player.playlist_next()
+    # PLAYER.playlist_next()
     # save_last_station(player)
 
 
+BTN_NEXT.when_pressed = btn_next_handler
 atexit.register(exit_program)
-
 LOG.info("start radio")
-btn_toggle = Button(BTN1_PIN, pull_up=True, bounce_time=0.1)
-btn_toggle.when_pressed = btn_toggle_handler
-btn_next = Button(BTN2_PIN, pull_up=True, bounce_time=0.1)
-btn_next.when_pressed = btn_next_handler
 
 PLAYER.playlist_clear()
 PLAYER.loop_playlist = True
@@ -180,11 +175,18 @@ for url in RADIO:
     PLAYER.playlist_append(url)
 
 PLAYER.playlist_play_index(get_saved_station())
-# todo cleaning -> scrolling ability
-scroll_index = 0
-scroll_text = ""
+
 while True:
     try:
+        # todo bug -> scrolling doesn't always stops at last char?
+        if LCD_SCROLL and time.time() - LCD_LOCK > 0.5:
+            LCD_LOCK = time.time()
+            LCD.lcd_display_string(SCROLL_TEXT[SCROLL_INDEX: SCROLL_INDEX + 16], 2)
+            # wait one second at start and end of the text line. Otherwise it's harder to read
+            if SCROLL_INDEX == 0 or SCROLL_INDEX == len(SCROLL_TEXT) - 16:
+                LCD_LOCK += 1
+            SCROLL_INDEX = 0 if SCROLL_INDEX == len(SCROLL_TEXT) - 16 else SCROLL_INDEX + 1
+
         if CURRENT_STATION != PLAYER.metadata['icy-name']:
             LCD_SCROLL = False
             CURRENT_STATION = PLAYER.metadata['icy-name']
@@ -195,15 +197,7 @@ while True:
                 LCD.lcd_display_string(lines[1], 2)
             LCD_LOCK = time.time()
 
-        # todo bug -> scrolling doesn't always stops at last char
-        elif LCD_SCROLL and CURRENT_PLAYING == PLAYER.metadata['icy-title'] and time.time() - LCD_LOCK > 0.5:
-            LCD_LOCK = time.time()
-            LCD.lcd_display_string(scroll_text[scroll_index : scroll_index + 16], 2)
-            if scroll_index == 0 or scroll_index == len(scroll_text) - 16:  # wait one second at start and end of the text line. Otherwise it's harder to read
-                LCD_LOCK += 1
-            scroll_index = 0 if scroll_index == len(scroll_text) - 16 else scroll_index + 1
-
-        elif CURRENT_PLAYING != PLAYER.metadata['icy-title'] and time.time() - LCD_LOCK > 5:
+        if CURRENT_PLAYING != PLAYER.metadata['icy-title'] and time.time() - LCD_LOCK > 5:
             LCD_SCROLL = False
             CURRENT_PLAYING = PLAYER.metadata['icy-title']
             LOG.debug(f"New icy-title: {CURRENT_PLAYING}")
@@ -217,9 +211,7 @@ while True:
                 scroll_lines = []
                 for i in range(1, len(lines)):
                     scroll_lines.append(lines[i])
-                scroll_text = " ".join(scroll_lines)  # concat lines except the first item
-
-
+                SCROLL_TEXT = " ".join(scroll_lines)  # concat lines except the first item (is printed on line 1)
 
     except (TypeError, KeyError):
         pass  # no icy data...

@@ -1,0 +1,13 @@
+### /etc/systemd/system/piradio.service
+[Unit]
+Description=piradio
+Wants=network.target
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python /home/pi/piradio/main.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
