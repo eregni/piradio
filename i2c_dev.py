@@ -1,4 +1,4 @@
-#  SOURCE: https://github.com/the-raspberry-pi-guy/lcd.git
+# ORIGINAL SOURCE: https://github.com/the-raspberry-pi-guy/lcd.git
 
 from smbus import SMBus
 from RPi.GPIO import RPI_REVISION

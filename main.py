@@ -47,7 +47,11 @@ i2c group and permission settings (https://arcanesciencelab.wordpress.com/2014/0
     # groupadd i2c
     # usermod -aG i2c [myusername]
     # echo 'KERNEL=="i2c-[0-9]*", GROUP="i2c"' >> /etc/udev/rules.d/raspberrypi.rules
+
+i2c speed
+    dtparam=i2c_arm=on,i2c_arm_baudrate=400000 -> /boot/config.txt
 """
+# todo create script to start/stop this thing as a systemd service
 # todo solder transistor to control the power supply of the lcd
 
 import logging
@@ -78,8 +82,8 @@ BTN1_PIN = 25
 BTN2_PIN = 24
 # End config ################################################################################
 
-# Logging config ##############################################################################
-LOG_LEVEL = logging.DEBUG
+# Logging config ############################################################################
+LOG_LEVEL = logging.INFO
 LOG_FORMATTER = logging.Formatter(
     fmt='[%(asctime)s.%(msecs)03d] [%(module)s] %(levelname)s: %(message)s',
     datefmt='%D %H:%M:%S',
@@ -88,39 +92,28 @@ LOG_FORMATTER.default_msec_format = '%s.%03d'
 LOG_HANDLER_FILE = logging.FileHandler(filename='piradio.log')
 LOG_HANDLER_FILE.setFormatter(LOG_FORMATTER)
 LOG_HANDLER_FILE.setLevel(LOG_LEVEL)
-# todo stream logger not printing to console
 LOG_HANDLER_CONSOLE = logging.StreamHandler()
 LOG_HANDLER_CONSOLE.setFormatter(LOG_FORMATTER)
 LOG_HANDLER_CONSOLE.setLevel(LOG_LEVEL)
 LOG = logging.getLogger()
 LOG.addHandler(LOG_HANDLER_FILE)
+LOG.addHandler(LOG_HANDLER_CONSOLE)
 LOG.setLevel(LOG_LEVEL)
 # End logging config #######################################################################
-
 
 def mpv_log(loglevel, component, message):
     """Log handler for the python-mpv.MPV instance"""
     LOG.debug('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
 
-
+# Global vars
 PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
 PLAYER.set_loglevel('error')
 LCD = Lcd()
-
-
-def lcd_update(text: str) -> None:
-    """
-    Send metadata to lcd screen
-    :param text: str to display on lcd. If the string is longer than 16 chars if will be wrapped upon two lines
-    """
-    text = textwrap.wrap(text, 16)
-    LCD.lcd_clear()
-    try:
-        LCD.lcd_display_string(text[0], 1)
-        if len(text) > 1:
-            LCD.lcd_display_string(text[1], 2)
-    except IndexError:
-        LOG.warning("Problem while sending text to the lcd screen")
+CURRENT_STATION = ""
+CURRENT_PLAYING = ""
+LCD_LOCK = time.time()
+LCD_SCROLL = False
+# ##########################################################################################
 
 
 def get_saved_station() -> int:
@@ -139,25 +132,25 @@ def get_saved_station() -> int:
 
     return index
 
-# todo: use constants instead of parameters. (No OO programing here)
-def save_last_station(player: mpv.MPV) -> None:
+def save_last_station() -> None:
     """
     Save station playlist index to file
     :param player: python-mpv MPV instance
     """
     with open(SAVED_STATION, 'w') as f:
-        f.write(str(player.playlist_current_pos))
+        f.write(str(PLAYER.playlist_current_pos))
     LOG.debug("Saved station playlist index to file")
 
 
-def signal_exit_program():
+def exit_program():
     """
     handler for atexit
     """
-    LOG.info("Atexit handler triggered. Exit program")
+    line = "#" * 75
+    LOG.info(f"Atexit handler triggered. Exit program{line}\n")
     LCD.lcd_clear()
     PLAYER.stop()
-    PLAYER.quit()
+    PLAYER.terminate()
     exit(0)
 
 # Todo: button handling
@@ -173,7 +166,7 @@ def btn_next_handler():
     # save_last_station(player)
 
 
-atexit.register(signal_exit_program)
+atexit.register(exit_program)
 
 LOG.info("start radio")
 btn_toggle = Button(BTN1_PIN, pull_up=True, bounce_time=0.1)
@@ -187,28 +180,51 @@ for url in RADIO:
     PLAYER.playlist_append(url)
 
 PLAYER.playlist_play_index(get_saved_station())
-playing = True
-current_station = ""
-current_playing = ""
-lcd_lock = time.time()
-
+# todo cleaning -> scrolling ability
+scroll_index = 0
+scroll_text = ""
 while True:
     try:
-        # todo scroll text if necessary
-        if playing and current_station != PLAYER.metadata['icy-name']:
-            current_station =PLAYER.metadata['icy-name']
-            LOG.debug(f"New icy-name: {current_station}")
-            lcd_update(current_station)
-            lcd_lock = time.time()
-        elif playing and current_playing != PLAYER.metadata['icy-title'] and time.time() - lcd_lock > 5:
-            current_playing = PLAYER.metadata['icy-title']
-            LOG.debug(f"New icy-title: {current_playing}")
-            lcd_update(current_playing)
+        if CURRENT_STATION != PLAYER.metadata['icy-name']:
+            LCD_SCROLL = False
+            CURRENT_STATION = PLAYER.metadata['icy-name']
+            LOG.debug(f"New icy-name: {CURRENT_STATION}")
+            lines = textwrap.wrap(CURRENT_STATION, 16)
+            LCD.lcd_display_string(lines[0], 1)
+            if len(lines) > 1:
+                LCD.lcd_display_string(lines[1], 2)
+            LCD_LOCK = time.time()
+
+        # todo bug -> scrolling doesn't always stops at last char
+        elif LCD_SCROLL and CURRENT_PLAYING == PLAYER.metadata['icy-title'] and time.time() - LCD_LOCK > 0.5:
+            LCD_LOCK = time.time()
+            LCD.lcd_display_string(scroll_text[scroll_index : scroll_index + 16], 2)
+            if scroll_index == 0 or scroll_index == len(scroll_text) - 16:  # wait one second at start and end of the text line. Otherwise it's harder to read
+                LCD_LOCK += 1
+            scroll_index = 0 if scroll_index == len(scroll_text) - 16 else scroll_index + 1
+
+        elif CURRENT_PLAYING != PLAYER.metadata['icy-title'] and time.time() - LCD_LOCK > 5:
+            LCD_SCROLL = False
+            CURRENT_PLAYING = PLAYER.metadata['icy-title']
+            LOG.debug(f"New icy-title: {CURRENT_PLAYING}")
+            lines = textwrap.wrap(CURRENT_PLAYING, 16)
+            LCD.lcd_clear()
+            LCD.lcd_display_string(lines[0], 1)
+            if len(lines) == 2:
+                LCD.lcd_display_string(lines[1], 2)
+            elif len(lines) > 2:  # enable text scrolling
+                LCD_SCROLL = True
+                scroll_lines = []
+                for i in range(1, len(lines)):
+                    scroll_lines.append(lines[i])
+                scroll_text = " ".join(scroll_lines)  # concat lines except the first item
+
+
+
     except (TypeError, KeyError):
-        LOG.debug("No (icy) metadata available")
+        pass  # no icy data...
     except mpv.ShutdownError:
-        LOG.debug("ShutdownError")
-        LCD.lcd_clear()
-        exit(0)
+        LOG.warning("ShutdownError")
+        exit_program()
 
     time.sleep(0.001)  # 10 times less cpu usage
