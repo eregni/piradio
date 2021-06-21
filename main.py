@@ -45,25 +45,22 @@ the user needs to be in the 'audio' group
 
 i2c group and permission settings (https://arcanesciencelab.wordpress.com/2014/02/02/bringing-up-i2c-on-the-raspberry-pi-with-arch-linux/)
     # groupadd i2c
-    # usermod -aG i2c [myusername]
+    # usermod -aG i2c [username]
     # echo 'KERNEL=="i2c-[0-9]*", GROUP="i2c"' >> /etc/udev/rules.d/raspberrypi.rules
 
 i2c speed
     dtparam=i2c_arm=on,i2c_arm_baudrate=400000 -> /boot/config.txt
 """
-# todo profiling and optimization
 # todo solder transistor to control the power supply of the lcd
 # todo check header soldering
 # todo add bash code to poll on/off pin
 # todo add pullups to i2c lines???
-
 import logging
 import atexit
 import time
 from sys import exit
 import textwrap
-
-from gpiozero import Button
+from gpiozero import Button, OutputDevice
 import mpv
 from datetime import datetime
 from i2c_dev import Lcd
@@ -78,10 +75,12 @@ RADIO = (
     ('Klara Continuo', 'http://icecast.vrtcdn.be/klaracontinuo.aac'),
     ('La premiere', 'https://radios.rtbf.be/laprem1ere-128.mp3'),  # aac not available in 128 bit quality for now
     ('Musique 3', 'https://radios.rtbf.be/musiq3-128.aac'),
-    ('Vrt NWS', 'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3')
+    ('Vrt NWS', 'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'),
+    ('Venice Classic radio', 'https://uk2.streamingpulse.com/ssl/vcr1')
 )
 SAVED_STATION = 'last_station.txt'
 BTN1_PIN = 25
+LCD_POWER_PIN = 16
 # End config ################################################################################
 
 # Logging config ############################################################################
@@ -109,6 +108,9 @@ def mpv_log(loglevel, component, message):
     """Log handler for the python-mpv.MPV instance"""
     LOG.warning('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
 
+# turn on lcd
+LCD_POWER = OutputDevice(LCD_POWER_PIN)
+LCD_POWER.on()
 
 # Global vars
 PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
@@ -153,6 +155,7 @@ def exit_program():
     line = "#" * 75
     LOG.info(f"Atexit handler triggered. Exit program\n{line}\n")
     LCD.lcd_clear()
+    LCD_POWER.off()
     PLAYER.stop()
     PLAYER.terminate()
     exit(0)
@@ -169,11 +172,14 @@ def display_radio_name():
     LCD.lcd_display_string(lines[0], 1)
     LOG.debug(f"New icy-name: {CURRENT_STATION}")
     if len(lines) > 1:
-        LCD.lcd_display_string(lines[1], 2)  # todo scroll text when len(lines) > 2 ???
+        LCD.lcd_display_string(lines[1], 2)
 
 
 def display_icy_title():
-    """Display icy-title. Activate scrolling when there are more than 2 lines to be displayed"""
+    """
+    Display icy-title. Activate scrolling when there are more than 2 lines to be displayed
+    # Todo: The icy-title from vrt stations seems to be capped at 63 chars. email for info?
+    """
     global CURRENT_PLAYING
     CURRENT_PLAYING = PLAYER.metadata['icy-title']
     if CURRENT_PLAYING == "":
@@ -226,14 +232,13 @@ PLAYER.playlist_play_index(get_saved_station())
 PLAYER.wait_until_playing()
 LOG.info("Radio stream started")
 
-# todo metadata (icy-title) is cut off at +-30 chars
 while True:
     try:
         if LCD_SCROLL and time.time() - SCROLL_LOCK > 0.5:
             SCROLL_LOCK = time.time()
             if SCROLL_INDEX == 0 or SCROLL_INDEX == len(SCROLL_TEXT) - 16:
-                # add one second delay at start and end of the text line. Otherwise it's harder to read
-                SCROLL_LOCK += 1
+                # add two seconds delay at start and end of the text line. Otherwise it's harder to read
+                SCROLL_LOCK += 2
             display_scroll_text()
 
         if CURRENT_STATION != PLAYER.metadata['icy-name']:
