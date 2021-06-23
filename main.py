@@ -50,10 +50,12 @@ i2c group and permission settings (https://arcanesciencelab.wordpress.com/2014/0
 
 i2c speed
     dtparam=i2c_arm=on,i2c_arm_baudrate=400000 -> /boot/config.txt
+
+atexit module catches SIGINT. You need to specify the kill signal in the systemd service since it sends by default SIGTERM
+    -> KillSignal=SIGINT
 """
 # todo solder transistor to control the power supply of the lcd
 # todo check header soldering
-# todo add bash code to poll on/off pin
 # todo add pullups to i2c lines???
 import logging
 import atexit
@@ -66,7 +68,6 @@ from datetime import datetime
 from i2c_dev import Lcd
 
 # Config ################################################################################
-AUDIO_DEVICE = 'alsa/default:CARD=sndrpihifiberry'
 RADIO = (
     ('Radio1', 'http://icecast.vrtcdn.be/radio1.aac'),
     ('Radio1 Classics', 'http://icecast.vrtcdn.be/radio1_classics.aac'),
@@ -78,13 +79,14 @@ RADIO = (
     ('Vrt NWS', 'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'),
     ('Venice Classic radio', 'https://uk2.streamingpulse.com/ssl/vcr1')
 )
+AUDIO_DEVICE = 'alsa/default:CARD=sndrpihifiberry'
 SAVED_STATION = 'last_station.txt'
 BTN1_PIN = 25
 LCD_POWER_PIN = 16
 # End config ################################################################################
 
 # Logging config ############################################################################
-LOG_LEVEL = logging.DEBUG
+LOG_LEVEL = logging.INFO
 LOG_FORMATTER = logging.Formatter(
     fmt='[%(asctime)s.%(msecs)03d] [%(module)s] %(levelname)s: %(message)s',
     datefmt='%D %H:%M:%S',
@@ -150,6 +152,7 @@ def save_last_station() -> None:
     LOG.debug("Saved station playlist index to file")
 
 
+@atexit.register
 def exit_program():
     """handler for atexit -> stop mpv player. clear lcd screen"""
     line = "#" * 75
@@ -222,7 +225,6 @@ def btn_next_handler():
 
 
 BTN_NEXT.when_pressed = btn_next_handler
-atexit.register(exit_program)
 
 PLAYER.playlist_clear()
 PLAYER.loop_playlist = True
