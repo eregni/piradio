@@ -56,7 +56,7 @@ atexit module catches SIGINT. You need to specify the kill signal in the systemd
 """
 # todo solder transistor to control the power supply of the lcd
 # todo check header soldering
-# todo add pullups to i2c lines???
+# todo add pullups to i2c lines??? when beadrate is set to 400Khz there are a log of communication errors
 import logging
 import atexit
 import time
@@ -68,6 +68,7 @@ from datetime import datetime
 from i2c_dev import Lcd
 
 # Config ################################################################################
+# List with radio station: Tuples with name as it should appear on the lcd screen + URL
 RADIO = (
     ('Radio 1', 'http://icecast.vrtcdn.be/radio1.aac'),
     ('Radio 1 Classics', 'http://icecast.vrtcdn.be/radio1_classics.aac'),
@@ -109,6 +110,7 @@ LOG.setLevel(LOG_LEVEL)
 def mpv_log(loglevel, component, message):
     """Log handler for the python-mpv.MPV instance"""
     LOG.warning('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
+
 
 # turn on lcd
 LCD_POWER = OutputDevice(LCD_POWER_PIN)
@@ -226,6 +228,7 @@ BTN_NEXT.when_pressed = btn_next_handler
 LCD.lcd_display_string(RADIO[CURRENT_STATION][0], 1)
 PLAYER.play(RADIO[CURRENT_STATION][1])
 PLAYER.wait_until_playing()
+# Todo: display error message when stream cannot play
 LOG.info("Radio stream started")
 time.sleep(2)  # leave the radio name for 2 sec
 while True:
@@ -263,7 +266,7 @@ while True:
                 display_icy_title(CURRENT_PLAYING)
 
     except KeyError:
-        # KeyError could be triggered when 'icy-title' doesn't exists
+        # KeyError could be triggered when 'icy-title' doesn't exists (yet. After changing station for example)
         pass
     except mpv.ShutdownError:
         LOG.error("ShutdownError from mpv")
