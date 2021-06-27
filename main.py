@@ -55,9 +55,9 @@ atexit module catches SIGINT. You need to specify the kill signal in the systemd
     -> KillSignal=SIGINT
 """
 # todo solder transistor to control the power supply of the lcd
-# todo check header soldering
-# todo add pullups to i2c lines??? when beadrate is set to 400Khz there are a log of communication errors
+# todo add pull-up resistors to i2c lines??? when baud rate is set to 400Khz there are a log of communication errors
 import logging
+from logging.handlers import RotatingFileHandler
 import atexit
 import time
 from sys import exit
@@ -81,19 +81,19 @@ RADIO = (
     ('Venice Classic radio', 'https://uk2.streamingpulse.com/ssl/vcr1')
 )
 AUDIO_DEVICE = 'alsa/default:CARD=sndrpihifiberry'
-SAVED_STATION = 'last_station.txt'
+SAVED_STATION = 'last_station.txt'  # save last opened station
 BTN1_PIN = 25
 LCD_POWER_PIN = 16
+LOG_LEVEL = logging.INFO
 # End config ################################################################################
 
 # Logging config ############################################################################
-LOG_LEVEL = logging.INFO
 LOG_FORMATTER = logging.Formatter(
     fmt='[%(asctime)s.%(msecs)03d] [%(module)s] %(levelname)s: %(message)s',
     datefmt='%D %H:%M:%S',
 )
 LOG_FORMATTER.default_msec_format = '%s.%03d'
-LOG_HANDLER_FILE = logging.FileHandler(filename='piradio.log')
+LOG_HANDLER_FILE = RotatingFileHandler(filename='piradio.log', maxBytes=2000, backupCount=1)
 LOG_HANDLER_FILE.setFormatter(LOG_FORMATTER)
 LOG_HANDLER_FILE.setLevel(LOG_LEVEL)
 LOG_HANDLER_CONSOLE = logging.StreamHandler()
@@ -131,10 +131,10 @@ SELECTOR_FLAG = False
 # ##########################################################################################
 
 
-def get_saved_station() -> int:
+def get_saved_station():
     """
     get saved playlist index nr
-    :return: int: index nr
+    :return: int: index nr to use with RADIO
     """
     try:
         with open(SAVED_STATION, 'r') as f:
@@ -147,7 +147,7 @@ def get_saved_station() -> int:
     return index
 
 
-def save_last_station() -> None:
+def save_last_station():
     """Save station playlist index to file"""
     with open(SAVED_STATION, 'w') as f:
         f.write(str(CURRENT_STATION))
@@ -192,8 +192,10 @@ def display_icy_title(title):
         set_up_scrolling(lines)
 
 
-def set_up_scrolling(lines: list[str]):
-    """Activate scrolling and set up the SCROLL_TEXT"""
+def set_up_scrolling(lines):
+    """Activate scrolling and set up the SCROLL_TEXT
+    :type lines: List[str] -> textwrap.wrap()
+    """
     global LCD_SCROLL, SCROLL_TEXT
     LCD_SCROLL = True
     scroll_lines = []
@@ -224,12 +226,27 @@ def btn_next_handler():
     LOG.debug("Btn_next pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
 
 
+def play_radio(url):
+    """
+    Start playing url. Display error message when PLAYER is still idle after 10 seconds
+    :param url: str
+    """
+    timestamp = time.time()
+    PLAYER.play(url)
+    while PLAYER.core_idle:
+        if time.time() - timestamp >= 10:
+            LOG.error("Cannot start radio")
+            LCD.lcd_display_string("ERROR: cannot", 1)
+            LCD.lcd_display_string("start playing", 2)
+            break
+
+    if not PLAYER.core_idle:
+        LOG.info(f"Radio stream started: {url}")
+
+
 BTN_NEXT.when_pressed = btn_next_handler
 LCD.lcd_display_string(RADIO[CURRENT_STATION][0], 1)
-PLAYER.play(RADIO[CURRENT_STATION][1])
-PLAYER.wait_until_playing()
-# Todo: display error message when stream cannot play
-LOG.info("Radio stream started")
+play_radio(RADIO[CURRENT_STATION][1])
 time.sleep(2)  # leave the radio name for 2 sec
 while True:
     try:
@@ -266,7 +283,7 @@ while True:
                 display_icy_title(CURRENT_PLAYING)
 
     except KeyError:
-        # KeyError could be triggered when 'icy-title' doesn't exists (yet. After changing station for example)
+        # KeyError could be triggered when 'icy-title' doesn't exists (no station is playing)
         pass
     except mpv.ShutdownError:
         LOG.error("ShutdownError from mpv")
