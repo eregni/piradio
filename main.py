@@ -54,8 +54,6 @@ i2c speed
 atexit module catches SIGINT. You need to specify the kill signal in the systemd service since it sends by default SIGTERM
     -> KillSignal=SIGINT
 """
-# todo solder transistor to control the power supply of the lcd
-# todo add pull-up resistors to i2c lines??? when baud rate is set to 400Khz there are a log of communication errors
 import logging
 from logging.handlers import RotatingFileHandler
 import atexit
@@ -179,7 +177,6 @@ def display_radio_name(name):
 def display_icy_title(title):
     """
     Display icy-title on lcd. Activate scrolling when there are more than 2 lines to be displayed
-    # Todo: The icy-title from vrt stations seems to be capped at 63 chars. email for info?
     :param title: string title to display
     """
     lines = textwrap.wrap(title, 16)
@@ -259,7 +256,7 @@ while True:
             while time.time() - selector <= 3:
                 if SELECTOR_FLAG:
                     SELECTOR_FLAG, selector = False, time.time()
-                    CURRENT_STATION = 0 if CURRENT_STATION == len(RADIO) else CURRENT_STATION + 1
+                    CURRENT_STATION = 0 if CURRENT_STATION == len(RADIO) - 1 else CURRENT_STATION + 1
                     display_radio_name(RADIO[CURRENT_STATION][0])
 
             if CURRENT_STATION != currently_selected:
