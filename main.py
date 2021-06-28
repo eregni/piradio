@@ -54,6 +54,9 @@ i2c speed
 atexit module catches SIGINT. You need to specify the kill signal in the systemd service since it sends by default SIGTERM
     -> KillSignal=SIGINT
 """
+# todo pylint
+# todo get rid of global keyword
+# todo better contacts between buttons/lcd and rpi
 import logging
 from logging.handlers import RotatingFileHandler
 import atexit
@@ -104,21 +107,48 @@ if LOG_LEVEL == logging.DEBUG:
 LOG.setLevel(LOG_LEVEL)
 # End logging config #######################################################################
 
+# turn on lcd
+LCD_POWER = OutputDevice(LCD_POWER_PIN)
+LCD_POWER.on()
+
 
 def mpv_log(loglevel, component, message):
     """Log handler for the python-mpv.MPV instance"""
     LOG.warning('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
 
 
-# turn on lcd
-LCD_POWER = OutputDevice(LCD_POWER_PIN)
-LCD_POWER.on()
+def get_saved_station(filename):
+    """
+    get saved RADIO index nr
+    :type filename: str, file name
+    :return: int, index nr to use with RADIO
+    """
+    try:
+        with open(filename, 'r') as f:
+            index = int(f.readline())
+        LOG.debug(f"Retrieving saved last radio index: {index}")
+    except (FileNotFoundError, BaseException):
+        index = 0
+        LOG.warning("Error while reading saved playlist index nr. Getting first item instead")
+
+    return index
+
+
+def save_last_station(filename, index_nr):
+    """Save station RADIO index to file
+    :type filename: str,file name
+    :param index_nr: int, index to be used in the RADIO list
+    """
+    with open(filename, 'w') as f:
+        f.write(str(index_nr))
+    LOG.debug(f"Saved RADIO index {index_nr} to file")
+
 
 # Global vars
 PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
 PLAYER.set_loglevel('error')
 LCD = Lcd()
-CURRENT_STATION = 0
+CURRENT_STATION = get_saved_station(SAVED_STATION)
 CURRENT_PLAYING = ""
 LCD_SCROLL = False
 SCROLL_INDEX = 0
@@ -127,29 +157,6 @@ SCROLL_LOCK = time.time()
 BTN_NEXT = Button(BTN1_PIN, pull_up=True, bounce_time=0.05)
 SELECTOR_FLAG = False
 # ##########################################################################################
-
-
-def get_saved_station():
-    """
-    get saved playlist index nr
-    :return: int: index nr to use with RADIO
-    """
-    try:
-        with open(SAVED_STATION, 'r') as f:
-            index = int(f.readline())
-        LOG.debug(f"Retrieving saved last radio: {RADIO[index][0]}")
-    except (FileNotFoundError, BaseException):
-        index = 0
-        LOG.warning("Error while reading saved playlist index nr. Getting first item in playlist instead")
-
-    return index
-
-
-def save_last_station():
-    """Save station playlist index to file"""
-    with open(SAVED_STATION, 'w') as f:
-        f.write(str(CURRENT_STATION))
-    LOG.debug("Saved station playlist index to file")
 
 
 @atexit.register
@@ -169,8 +176,11 @@ def display_radio_name(name):
     Display radio name on lcd
     :param name: string to display
     """
+    wrap = textwrap.wrap(name, 16)
     LCD.lcd_clear()
-    LCD.lcd_display_string(name, 1)
+    LCD.lcd_display_string(wrap[0], 1)
+    if len(wrap) > 1:
+        LCD.lcd_display_string(wrap[1], 2)
     LOG.debug(f"New station: {name}")
 
 
@@ -191,7 +201,7 @@ def display_icy_title(title):
 
 def set_up_scrolling(lines):
     """Activate scrolling and set up the SCROLL_TEXT
-    :type lines: List[str] -> textwrap.wrap()
+    :param lines: List[str] -> textwrap.wrap()
     """
     global LCD_SCROLL, SCROLL_TEXT
     LCD_SCROLL = True
@@ -202,25 +212,27 @@ def set_up_scrolling(lines):
     SCROLL_TEXT = " ".join(scroll_lines)
 
 
-def select_new_station():
+def select_station():
     """
     Display the current station on lcd.
-    If you the select button again the display will loop over the the names in RADIO.
+    If you the press 'radio select' button again within 3 sec
+    the display will loop over the the names in RADIO and the index
+    value will be set in CURRENT_STATION.
+    :return: bool, True if the value of CURRENT_STATION has changed
+
     """
-    global CURRENT_STATION
-    current_selection = CURRENT_STATION
+    global CURRENT_STATION, SELECTOR_FLAG
+    timestamp = time.time()
     display_radio_name(RADIO[CURRENT_STATION][0])
-    CURRENT_STATION = 0 if CURRENT_STATION == len(RADIO) - 1 else CURRENT_STATION + 1
-    while time.time() - SELECTOR_FLAG <= 3:
-        if current_selection != CURRENT_STATION:
+    new_station = False
+    while time.time() - timestamp <= 3:
+        if SELECTOR_FLAG:
+            SELECTOR_FLAG, timestamp = False, time.time()
+            CURRENT_STATION = 0 if CURRENT_STATION == len(RADIO) - 1 else CURRENT_STATION + 1
             display_radio_name(RADIO[CURRENT_STATION][0])
+            new_station = True
 
-
-def btn_next_handler():
-    """Handler -> play next radio station"""
-    global SELECTOR_FLAG
-    SELECTOR_FLAG = True
-    LOG.debug("Btn_next pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
+    return new_station
 
 
 def play_radio(url):
@@ -238,31 +250,28 @@ def play_radio(url):
             break
 
     if not PLAYER.core_idle:
+        save_last_station(SAVED_STATION, CURRENT_STATION)
         LOG.info(f"Radio stream started: {url}")
 
 
+def btn_next_handler():
+    """Handler -> play next radio station"""
+    global SELECTOR_FLAG
+    SELECTOR_FLAG = True
+    LOG.debug("Btn_next pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
+
+
 BTN_NEXT.when_pressed = btn_next_handler
-LCD.lcd_display_string(RADIO[CURRENT_STATION][0], 1)
 play_radio(RADIO[CURRENT_STATION][1])
-time.sleep(2)  # leave the radio name for 2 sec
+select_station()
 while True:
     try:
         if SELECTOR_FLAG:
             SELECTOR_FLAG = False
             LCD_SCROLL, SCROLL_TEXT, CURRENT_PLAYING = False, "", ""
-            selector = time.time()
-            currently_selected = CURRENT_STATION
-            display_radio_name(RADIO[CURRENT_STATION][0])
-            while time.time() - selector <= 3:
-                if SELECTOR_FLAG:
-                    SELECTOR_FLAG, selector = False, time.time()
-                    CURRENT_STATION = 0 if CURRENT_STATION == len(RADIO) - 1 else CURRENT_STATION + 1
-                    display_radio_name(RADIO[CURRENT_STATION][0])
-
-            if CURRENT_STATION != currently_selected:
-                PLAYER.play(RADIO[CURRENT_STATION][1])
-                PLAYER.wait_until_playing()
-                save_last_station()
+            station_changed = select_station()
+            if station_changed:
+                play_radio(RADIO[CURRENT_STATION][1])
                 SELECTOR_FLAG = 0
 
         if LCD_SCROLL and time.time() - SCROLL_LOCK > 0.5:
