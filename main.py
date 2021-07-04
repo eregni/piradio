@@ -220,6 +220,7 @@ def select_station():
 
     """
     global CURRENT_STATION, SELECTOR_FLAG
+    SELECTOR_FLAG = False
     timestamp = time.time()
     display_radio_name(RADIO[CURRENT_STATION][0])
     new_station = False
@@ -265,12 +266,10 @@ select_station()
 while True:
     try:
         if SELECTOR_FLAG:
-            SELECTOR_FLAG = False
             LCD_SCROLL, SCROLL_TEXT, CURRENT_PLAYING = False, "", ""
             station_changed = select_station()
             if station_changed:
                 play_radio(RADIO[CURRENT_STATION][1])
-                SELECTOR_FLAG = 0
 
         if LCD_SCROLL and time.time() - SCROLL_LOCK > 0.5:
             SCROLL_LOCK = time.time()
