@@ -54,9 +54,7 @@ i2c speed
 atexit module catches SIGINT. You need to specify the kill signal in the systemd service since it sends by default SIGTERM
     -> KillSignal=SIGINT
 """
-# todo pylint
-# todo get rid of global keyword
-# todo better contacts between buttons/lcd and rpi
+# todo check version of mpv -> mpv.MPV().mpv_version -> should be mpv 0.33.1-dirty
 import logging
 from logging.handlers import RotatingFileHandler
 import atexit
