@@ -54,7 +54,6 @@ i2c speed
 atexit module catches SIGINT. You need to specify the kill signal in the systemd service since it sends by default SIGTERM
     -> KillSignal=SIGINT
 """
-# todo check version of mpv -> mpv.MPV().mpv_version -> should be mpv 0.33.1-dirty
 import logging
 from logging.handlers import RotatingFileHandler
 import atexit
@@ -79,7 +78,7 @@ RADIO = (
     ('Vrt NWS', 'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'),
     ('Venice Classic radio', 'https://uk2.streamingpulse.com/ssl/vcr1')
 )
-AUDIO_DEVICE = 'alsa/default:CARD=sndrpihifiberry'
+AUDIO_DEVICE = 'alsa/hw:CARD=sndrpihifiberry'  # to check hw devices -> aplay -L
 SAVED_STATION = 'last_station.txt'  # save last opened station
 BTN1_PIN = 25
 LCD_POWER_PIN = 16
