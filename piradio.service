@@ -11,6 +11,8 @@ ExecStart=/usr/bin/python /home/pi/piradio/main.py
 KillSignal=SIGINT
 User=pi
 Group=pi
+Restart=on-failure
+StartLimitBurst=5
 
 [Install]
 WantedBy=multi-user.target
