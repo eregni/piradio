@@ -64,20 +64,9 @@ from gpiozero import Button, OutputDevice, RotaryEncoder
 import mpv
 from datetime import datetime
 from i2c_dev import Lcd
+from radio_list import RADIO
 
 # Config ################################################################################
-# List with radio station: Tuples with name as it should appear on the lcd screen + URL
-RADIO = (
-    ('Radio 1', 'http://icecast.vrtcdn.be/radio1.aac'),
-    ('Radio 1 Classics', 'http://icecast.vrtcdn.be/radio1_classics.aac'),
-    ('Radio 2', 'http://icecast.vrtcdn.be/ra2ant.aac'),
-    ('Klara', 'http://icecast.vrtcdn.be/klara.aac'),
-    ('Klara Continuo', 'http://icecast.vrtcdn.be/klaracontinuo.aac'),
-    ('La premiere', 'https://radios.rtbf.be/laprem1ere-128.mp3'),  # aac not available in 128 bit quality for now
-    ('Musique 3', 'https://radios.rtbf.be/musiq3-128.aac'),
-    ('Vrt NWS', 'http://progressive-audio.lwc.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'),
-    ('Venice Classic radio', 'https://uk2.streamingpulse.com/ssl/vcr1')
-)
 AUDIO_DEVICE = 'alsa/hw:CARD=sndrpihifiberry'  # to check hw devices -> aplay -L
 SAVED_STATION = 'last_station.txt'  # save last opened station
 PIN_BTN_ROTARY = 25
@@ -155,8 +144,8 @@ SCROLL_INDEX = 0
 SCROLL_TEXT = ""
 SCROLL_LOCK = time.time()
 BTN_SELECT = Button(PIN_BTN_ROTARY, pull_up=True, bounce_time=BTN_BOUNCE)
-BTN_ROTARY = RotaryEncoder(PIN_ROTARY_DT, PIN_ROTARY_CLK, bounce_time=BTN_BOUNCE, max_steps=len(RADIO) - 1, wrap=True)
-# todo set radio station by BTN_ROTARY.value
+BTN_ROTARY = RotaryEncoder(PIN_ROTARY_DT, PIN_ROTARY_CLK, bounce_time=BTN_BOUNCE, max_steps=len(RADIO) - 1)
+BTN_ROTARY.steps = 0
 SELECTOR_FLAG = False
 ROTARY_DIRECTION = True  # True is clockwise
 BTN_SELECT_FLAG = False
@@ -310,8 +299,8 @@ BTN_SELECT.when_pressed = btn_select_handler
 BTN_ROTARY.when_rotated_clockwise = btn_rotary_clockwise_handler
 BTN_ROTARY.when_rotated_counter_clockwise = btn_rotary_counter_clockwise_handler
 
-play_radio(RADIO[CURRENT_STATION][1])
-select_station()
+play_radio(get_current_station()[1])
+display_radio_name(get_current_station()[0])
 while True:
     try:
         if BTN_SELECT_FLAG:
