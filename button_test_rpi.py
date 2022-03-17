@@ -1,15 +1,15 @@
 #!/usr/bin/python
 
 from RPi import GPIO
-from time import sleep, time_ns
+from time import time_ns
 
-# Test script for testing 2 push buttons and a incremental encoder (Bourns PEC11R)
+# Test script for testing 1 push button and an incremental encoder with push button (Bourns PEC11R)  todo: document button product nr
 # https://datasheet.octopart.com/PEC11R-4015F-S0024-Bourns-datasheet-68303416.pdf
 # The buttons are polled against a previous state.
 # The rotary button is polled against a previous state.
 
 # SETUP
-rotary_delay = 0  # time in ns
+rotary_delay = 0  # time in ns. A delay wasn't necessary with a ceramic capacitor a pull-up resistor (10K ohm, 0.01µF)
 clk = 6
 dt = 5
 btn_rotary = 25

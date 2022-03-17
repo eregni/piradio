@@ -25,7 +25,7 @@ The raspberrypi needs following packages (arch linux):
     lm_sensors
     i2c-tools
 
-python modules (use pip to install):
+python modules:
     python-mpv
     gpiozero
     smbus
@@ -60,7 +60,7 @@ import atexit
 import time
 from sys import exit
 import textwrap
-from gpiozero import Button, OutputDevice
+from gpiozero import Button, OutputDevice, RotaryEncoder
 import mpv
 from datetime import datetime
 from i2c_dev import Lcd
@@ -80,9 +80,12 @@ RADIO = (
 )
 AUDIO_DEVICE = 'alsa/hw:CARD=sndrpihifiberry'  # to check hw devices -> aplay -L
 SAVED_STATION = 'last_station.txt'  # save last opened station
-BTN1_PIN = 25
+PIN_BTN_ROTARY = 25
+PIN_ROTARY_DT = 5      # Momentary encoder A  TODO: what is the DT and CLK?
+PIN_ROTARY_CLK = 6     # Momentary encoder B
 LCD_POWER_PIN = 16
 LOG_LEVEL = logging.DEBUG
+BTN_BOUNCE = 0.05  # Button debounce time in seconds
 # End config ################################################################################
 
 # Logging config ############################################################################
@@ -151,8 +154,12 @@ LCD_SCROLL = False
 SCROLL_INDEX = 0
 SCROLL_TEXT = ""
 SCROLL_LOCK = time.time()
-BTN_NEXT = Button(BTN1_PIN, pull_up=True, bounce_time=0.05)
+BTN_SELECT = Button(PIN_BTN_ROTARY, pull_up=True, bounce_time=BTN_BOUNCE)
+BTN_ROTARY = RotaryEncoder(PIN_ROTARY_DT, PIN_ROTARY_CLK, bounce_time=BTN_BOUNCE, max_steps=len(RADIO) - 1, wrap=True)
+# todo set radio station by BTN_ROTARY.value
 SELECTOR_FLAG = False
+ROTARY_DIRECTION = True  # True is clockwise
+BTN_SELECT_FLAG = False
 # ##########################################################################################
 
 
@@ -178,7 +185,6 @@ def display_radio_name(name):
     LCD.lcd_display_string(wrap[0], 1)
     if len(wrap) > 1:
         LCD.lcd_display_string(wrap[1], 2)
-    LOG.debug(f"New station: {name}")
 
 
 def display_icy_title(title):
@@ -209,28 +215,51 @@ def set_up_scrolling(lines):
     SCROLL_TEXT = " ".join(scroll_lines)
 
 
-def select_station():
+def select_station(direction_clockwise=True):
     """
     Display the current station on lcd.
     If you the press 'radio select' button again within 3 sec
     the display will loop over the the names in RADIO and the index
     value will be set in CURRENT_STATION.
     :return: bool, True if the value of CURRENT_STATION has changed
-
     """
-    global CURRENT_STATION, SELECTOR_FLAG
+    global CURRENT_STATION, SELECTOR_FLAG, BTN_SELECT_FLAG
     SELECTOR_FLAG = False
     timestamp = time.time()
-    display_radio_name(RADIO[CURRENT_STATION][0])
-    new_station = False
+    new_station = get_next_station() if direction_clockwise else get_previous_station()
+    display_radio_name(new_station[0])
+    new_station_selected = True
     while time.time() - timestamp <= 3:
         if SELECTOR_FLAG:
             SELECTOR_FLAG, timestamp = False, time.time()
-            CURRENT_STATION = 0 if CURRENT_STATION == len(RADIO) - 1 else CURRENT_STATION + 1
-            display_radio_name(RADIO[CURRENT_STATION][0])
-            new_station = True
+            new_station = get_next_station() if direction_clockwise else get_previous_station()
+            display_radio_name(new_station[0])
+            new_station_selected = True  # todo select by waiting 3 sec or only with select button???
+        if BTN_SELECT_FLAG:
+            BTN_SELECT_FLAG = False
+            break
 
-    return new_station
+    return new_station_selected
+
+
+# todo documentation
+def get_current_station():
+    global CURRENT_STATION
+    return RADIO[CURRENT_STATION]
+
+
+# todo documentation
+def get_next_station():
+    global CURRENT_STATION
+    CURRENT_STATION = 0 if CURRENT_STATION == len(RADIO) - 1 else CURRENT_STATION + 1
+    return RADIO[CURRENT_STATION]
+
+
+# todo documentation
+def get_previous_station():
+    global CURRENT_STATION
+    CURRENT_STATION = len(RADIO) - 1 if CURRENT_STATION == 0 else CURRENT_STATION - 1
+    return RADIO[CURRENT_STATION]
 
 
 def play_radio(url):
@@ -252,21 +281,47 @@ def play_radio(url):
         LOG.info(f"Radio stream started: {url}")
 
 
-def btn_next_handler():
-    """Handler -> play next radio station"""
-    global SELECTOR_FLAG
+def activate_station_selector(direction=True):
+    global SELECTOR_FLAG, ROTARY_DIRECTION
+    ROTARY_DIRECTION = direction
     SELECTOR_FLAG = True
-    LOG.debug("Btn_next pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
 
 
-BTN_NEXT.when_pressed = btn_next_handler
+def btn_select_handler():
+    """Handler -> play next radio station"""
+    global BTN_SELECT_FLAG
+    BTN_SELECT_FLAG = True
+    LOG.debug("Btn_select pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
+
+
+def btn_rotary_clockwise_handler():
+    """Handler -> play next radio station"""
+    activate_station_selector()
+    LOG.debug(f"Rotary encoder turned clockwise. counter = {BTN_ROTARY.steps} {datetime.now().strftime('%H:%M:%S')}")
+
+
+def btn_rotary_counter_clockwise_handler():
+    """Handler -> play next radio station"""
+    activate_station_selector(direction=False)
+    LOG.debug(f"Rotary encoder turned counter clockwise. counter = {BTN_ROTARY.steps} {datetime.now().strftime('%H:%M:%S')}")
+
+
+BTN_SELECT.when_pressed = btn_select_handler
+BTN_ROTARY.when_rotated_clockwise = btn_rotary_clockwise_handler
+BTN_ROTARY.when_rotated_counter_clockwise = btn_rotary_counter_clockwise_handler
+
 play_radio(RADIO[CURRENT_STATION][1])
 select_station()
 while True:
     try:
+        if BTN_SELECT_FLAG:
+            BTN_SELECT_FLAG = False
+            display_radio_name(get_current_station()[0])
+
         if SELECTOR_FLAG:
             LCD_SCROLL, SCROLL_TEXT, CURRENT_PLAYING = False, "", ""
-            station_changed = select_station()
+
+            station_changed = select_station(ROTARY_DIRECTION)
             if station_changed:
                 play_radio(RADIO[CURRENT_STATION][1])
 
@@ -284,8 +339,8 @@ while True:
             if CURRENT_PLAYING != "":
                 display_icy_title(CURRENT_PLAYING)
 
-    except KeyError:
-        # KeyError could be triggered when 'icy-title' doesn't exists (no station is playing)
+    except (KeyError, TypeError):
+        # KeyError or TypeError could be triggered when 'icy-title' doesn't exist (or no station is playing)
         pass
     except mpv.ShutdownError:
         LOG.error("ShutdownError from mpv")
