@@ -257,14 +257,18 @@ def play_radio(url):
     """
     timestamp = time.time()
     PLAYER.play(url)
+    LCD.lcd_clear()
+    LCD.lcd_display_string("Tuning...", 1)
     while PLAYER.core_idle:
-        if time.time() - timestamp >= 10:
+        if time.time() - timestamp >= 60:
             LOG.error("Cannot start radio")
             LCD.lcd_display_string("ERROR: cannot", 1)
             LCD.lcd_display_string("start playing", 2)
+            # todo what happens when MPV is not starting? (timeout?)
             break
 
     if not PLAYER.core_idle:
+        display_radio_name(get_current_station()[0])
         save_last_station(SAVED_STATION, CURRENT_STATION)
         LOG.info(f"Radio stream started: {url}")
 
@@ -299,7 +303,6 @@ BTN_ROTARY.when_rotated_clockwise = btn_rotary_clockwise_handler
 BTN_ROTARY.when_rotated_counter_clockwise = btn_rotary_counter_clockwise_handler
 
 play_radio(get_current_station()[1])
-display_radio_name(get_current_station()[0])
 while True:
     try:
         if BTN_SELECT_FLAG:
