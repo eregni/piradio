@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+# todo update documentation
+# todo use the RotaryEncoder.steps to select radio station (needs extra manipulation but you can remove some functions and globals)
 """
 Script to play radio streams on a raspberrypi pimped with an audiophonics sabre dac v3
 Controlled by two buttons. 1 to play next station and 1 to start/stop playing
@@ -204,7 +206,7 @@ def set_up_scrolling(lines):
     SCROLL_TEXT = " ".join(scroll_lines)
 
 
-def select_station(direction_clockwise=True):
+def select_station():
     """
     Display the current station on lcd.
     If you the press 'radio select' button again within 3 sec
@@ -215,13 +217,13 @@ def select_station(direction_clockwise=True):
     global CURRENT_STATION, SELECTOR_FLAG, BTN_SELECT_FLAG
     SELECTOR_FLAG = False
     timestamp = time.time()
-    new_station = get_next_station() if direction_clockwise else get_previous_station()
+    new_station = get_next_station() if ROTARY_DIRECTION else get_previous_station()
     display_radio_name(new_station[0])
     new_station_selected = True
     while time.time() - timestamp <= 3:
         if SELECTOR_FLAG:
             SELECTOR_FLAG, timestamp = False, time.time()
-            new_station = get_next_station() if direction_clockwise else get_previous_station()
+            new_station = get_next_station() if ROTARY_DIRECTION else get_previous_station()
             display_radio_name(new_station[0])
             new_station_selected = True  # todo select by waiting 3 sec or only with select button???
         if BTN_SELECT_FLAG:
@@ -231,20 +233,17 @@ def select_station(direction_clockwise=True):
     return new_station_selected
 
 
-# todo documentation
 def get_current_station():
     global CURRENT_STATION
     return RADIO[CURRENT_STATION]
 
 
-# todo documentation
 def get_next_station():
     global CURRENT_STATION
     CURRENT_STATION = 0 if CURRENT_STATION == len(RADIO) - 1 else CURRENT_STATION + 1
     return RADIO[CURRENT_STATION]
 
 
-# todo documentation
 def get_previous_station():
     global CURRENT_STATION
     CURRENT_STATION = len(RADIO) - 1 if CURRENT_STATION == 0 else CURRENT_STATION - 1
@@ -310,7 +309,7 @@ while True:
         if SELECTOR_FLAG:
             LCD_SCROLL, SCROLL_TEXT, CURRENT_PLAYING = False, "", ""
 
-            station_changed = select_station(ROTARY_DIRECTION)
+            station_changed = select_station()
             if station_changed:
                 play_radio(RADIO[CURRENT_STATION][1])
 
