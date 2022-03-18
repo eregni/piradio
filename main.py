@@ -1,13 +1,11 @@
 #!/usr/bin/python3
-# todo update documentation
-# todo use the RotaryEncoder.steps to select radio station (needs extra manipulation but you can remove some functions and globals)
 """
 Script to play radio streams on a raspberrypi pimped with an audiophonics sabre dac v3
 Controlled by two buttons. 1 to play next station and 1 to start/stop playing
 It runs as a systemd service and is started/stopped by polling a gpio pin in a separate bash script. (it's not the only pin being polled)
 A small display is used to show the current played track.
 
-Usefull sources:
+Useful sources:
     arch arm config: https://archlinuxarm.org/platforms/armv7/broadcom/raspberry-pi-2
     run gpio as non-root: https://arcanesciencelab.wordpress.com/2016/03/31/running-rpi3-applications-that-use-gpio-without-being-root/
     radio stream url's: https://hendrikjansen.nl/henk/streaming1.html#wl
@@ -19,11 +17,19 @@ Usefull sources:
             4, 17, 22 (software shutdown, button shutdown, bootOk)
             18, 19, 21 (dac audio, DOCUMENTATION REFERS TO PHYSICAL PIN NRS 12, 35, 40)
 
-SET-UP
+HARDWARE:
+gpio buttons:
+    There is one rotary encoder with push button (Bourns PEC11R) and one push button. The rotary encoder is used to
+    select radio stations and the push button to toggle the radio.
+    https://datasheet.octopart.com/PEC11R-4015F-S0024-Bourns-datasheet-68303416.pdf
+Lcd screen:
+    A 16x2 lcd screen to display radio station names and icecast-info.
+
+SETUP:
 The raspberrypi needs following packages (arch linux):
     mpv
     alsa-utils
-    python-raspberry-gpio (from AUR -> yay is a usefull program to install aur packages)
+    python-raspberry-gpio (from AUR -> yay is a useful program to install aur packages)
     lm_sensors
     i2c-tools
 
@@ -110,9 +116,9 @@ def mpv_log(loglevel, component, message):
 
 def get_saved_station(filename):
     """
-    get saved RADIO index nr
-    :type filename: str, file name
-    :return: int, index nr to use with RADIO
+    Get saved RADIO index nr
+    @param filename: str, file name
+    @return: int, index nr referring to radio in RADIO
     """
     try:
         with open(filename, 'r') as f:
@@ -126,9 +132,10 @@ def get_saved_station(filename):
 
 
 def save_last_station(filename, index_nr):
-    """Save station RADIO index to file
-    :type filename: str,file name
-    :param index_nr: int, index to be used in the RADIO list
+    """
+    Save station RADIO index to file
+    @param filename: str, file name
+    @param index_nr: int, index nr referring to radio in RADIO
     """
     with open(filename, 'w') as f:
         f.write(str(index_nr))
@@ -151,6 +158,8 @@ BTN_ROTARY.steps = 0
 SELECTOR_FLAG = False
 ROTARY_DIRECTION = True  # True is clockwise
 BTN_SELECT_FLAG = False
+
+
 # ##########################################################################################
 
 
@@ -169,7 +178,7 @@ def exit_program():
 def display_radio_name(name):
     """
     Display radio name on lcd
-    :param name: string to display
+    @type name: string, radio name to print on display
     """
     wrap = textwrap.wrap(name, 16)
     LCD.lcd_clear()
@@ -181,7 +190,7 @@ def display_radio_name(name):
 def display_icy_title(title):
     """
     Display icy-title on lcd. Activate scrolling when there are more than 2 lines to be displayed
-    :param title: string title to display
+    @param title: string title to display
     """
     lines = textwrap.wrap(title, 16)
     LCD.lcd_clear()
@@ -194,8 +203,9 @@ def display_icy_title(title):
 
 
 def set_up_scrolling(lines):
-    """Activate scrolling and set up the SCROLL_TEXT
-    :param lines: List[str] -> textwrap.wrap()
+    """
+    Activate scrolling and set up the SCROLL_TEXT
+    @param lines: List[str] -> textwrap.wrap()
     """
     global LCD_SCROLL, SCROLL_TEXT
     LCD_SCROLL = True
@@ -208,24 +218,25 @@ def set_up_scrolling(lines):
 
 def select_station():
     """
-    Display the current station on lcd.
-    If you the press 'radio select' button again within 3 sec
-    the display will loop over the the names in RADIO and the index
-    value will be set in CURRENT_STATION.
-    :return: bool, True if the value of CURRENT_STATION has changed
+    This function should be called by the rotary encoder (SELECTOR_FLAG raised).
+    Display the next (or previous) station name on lcd.
+    If you push the rotary encoder OR wait for 3 seconds, the current displayed station will start playing.
+    new value will be set in CURRENT_STATION.
+    @return: bool, True if the value of CURRENT_STATION has changed. Should only return False when the user selects the
+    same station as CURRENT_STATION -> Don't start a stream if it's already playing...
     """
     global CURRENT_STATION, SELECTOR_FLAG, BTN_SELECT_FLAG
     SELECTOR_FLAG = False
     timestamp = time.time()
-    new_station = get_next_station() if ROTARY_DIRECTION else get_previous_station()
+    new_station = switch_station()
     display_radio_name(new_station[0])
     new_station_selected = True
     while time.time() - timestamp <= 3:
         if SELECTOR_FLAG:
             SELECTOR_FLAG, timestamp = False, time.time()
-            new_station = get_next_station() if ROTARY_DIRECTION else get_previous_station()
+            new_station = switch_station()
             display_radio_name(new_station[0])
-            new_station_selected = True  # todo select by waiting 3 sec or only with select button???
+            new_station_selected = True if new_station != CURRENT_STATION else False
         if BTN_SELECT_FLAG:
             BTN_SELECT_FLAG = False
             break
@@ -233,27 +244,40 @@ def select_station():
     return new_station_selected
 
 
-def get_current_station():
+def get_current_station_name():
+    """
+    Get radio current name from RADIO List
+    @return: Tuple[str, str], Radio name, Radio url
+    """
+    return RADIO[CURRENT_STATION][0]
+
+
+def get_current_station_url():
+    """
+    Get radio current name from RADIO List
+    @return: Tuple[str, str], Radio name, Radio url
+    """
+    return RADIO[CURRENT_STATION][1]
+
+
+def switch_station():
+    """
+    Switch station. Update CURRENT_STATION based on the value from ROTARY_DIRECTION
+    @return: List(Tuple), station from RADIO
+    """
     global CURRENT_STATION
-    return RADIO[CURRENT_STATION]
+    if ROTARY_DIRECTION:
+        CURRENT_STATION = 0 if CURRENT_STATION == len(RADIO) - 1 else CURRENT_STATION + 1
+    else:
+        CURRENT_STATION = len(RADIO) - 1 if CURRENT_STATION == 0 else CURRENT_STATION - 1
 
-
-def get_next_station():
-    global CURRENT_STATION
-    CURRENT_STATION = 0 if CURRENT_STATION == len(RADIO) - 1 else CURRENT_STATION + 1
-    return RADIO[CURRENT_STATION]
-
-
-def get_previous_station():
-    global CURRENT_STATION
-    CURRENT_STATION = len(RADIO) - 1 if CURRENT_STATION == 0 else CURRENT_STATION - 1
     return RADIO[CURRENT_STATION]
 
 
 def play_radio(url):
     """
-    Start playing url. Display error message when PLAYER is still idle after 10 seconds
-    :param url: str
+    Start playing url. Display error message when PLAYER is still idle after n seconds
+    @param url: str
     """
     timestamp = time.time()
     PLAYER.play(url)
@@ -268,58 +292,66 @@ def play_radio(url):
             break
 
     if not PLAYER.core_idle:
-        display_radio_name(get_current_station()[0])
+        display_radio_name(get_current_station_name())
         save_last_station(SAVED_STATION, CURRENT_STATION)
         LOG.info(f"Radio stream started: {url}")
 
 
-def activate_station_selector(direction=True):
-    global SELECTOR_FLAG, ROTARY_DIRECTION
-    ROTARY_DIRECTION = direction
-    SELECTOR_FLAG = True
-
-
+# Button handlers
 def btn_select_handler():
-    """Handler -> play next radio station"""
+    """Handler for push button from rotary encoder -> play next radio station"""
     global BTN_SELECT_FLAG
     BTN_SELECT_FLAG = True
     LOG.debug("Btn_select pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
 
 
+def activate_station_selector(direction):
+    """
+    Activate SELECTOR_FLAG -> starts the select_station() function and set the detected input from the rotary encoder
+    into ROTARY_DIRECTION.
+    @param direction: bool, True is clockwise, False counter-clockwise
+    """
+    global SELECTOR_FLAG, ROTARY_DIRECTION
+    ROTARY_DIRECTION = direction
+    SELECTOR_FLAG = True
+
+
 def btn_rotary_clockwise_handler():
     """Handler -> play next radio station"""
-    activate_station_selector()
+    activate_station_selector(direction=True)
     LOG.debug(f"Rotary encoder turned clockwise. counter = {BTN_ROTARY.steps} {datetime.now().strftime('%H:%M:%S')}")
 
 
 def btn_rotary_counter_clockwise_handler():
     """Handler -> play next radio station"""
     activate_station_selector(direction=False)
-    LOG.debug(f"Rotary encoder turned counter clockwise. counter = {BTN_ROTARY.steps} {datetime.now().strftime('%H:%M:%S')}")
+    LOG.debug(
+        f"Rotary encoder turned counter-clockwise. counter = {BTN_ROTARY.steps} {datetime.now().strftime('%H:%M:%S')}")
+# End Button handlers
 
 
 BTN_SELECT.when_pressed = btn_select_handler
 BTN_ROTARY.when_rotated_clockwise = btn_rotary_clockwise_handler
 BTN_ROTARY.when_rotated_counter_clockwise = btn_rotary_counter_clockwise_handler
 
-play_radio(get_current_station()[1])
+play_radio(get_current_station_url())
 while True:
     try:
         if BTN_SELECT_FLAG:
             BTN_SELECT_FLAG = False
-            display_radio_name(get_current_station()[0])
+            display_radio_name(get_current_station_name())
 
         if SELECTOR_FLAG:
             LCD_SCROLL, SCROLL_TEXT, CURRENT_PLAYING = False, "", ""
 
             station_changed = select_station()
             if station_changed:
-                play_radio(RADIO[CURRENT_STATION][1])
+                play_radio(get_current_station_url())
 
         if LCD_SCROLL and time.time() - SCROLL_LOCK > 0.5:
             SCROLL_LOCK = time.time()
             if SCROLL_INDEX == 0 or SCROLL_INDEX == len(SCROLL_TEXT) - 16:
-                # add two seconds delay at start and end of the text line. Otherwise it's harder to read
+                # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
                 SCROLL_LOCK += 2
             LCD.lcd_display_string(SCROLL_TEXT[SCROLL_INDEX: SCROLL_INDEX + 16], 2)
             SCROLL_INDEX = 0 if SCROLL_INDEX >= len(SCROLL_TEXT) - 16 else SCROLL_INDEX + 1

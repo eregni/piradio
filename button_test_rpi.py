@@ -3,7 +3,7 @@
 from RPi import GPIO
 from time import time_ns
 
-# Test script for testing 1 push button and an incremental encoder with push button (Bourns PEC11R)  todo: document button product nr
+# Test script for testing 1 push button and an incremental encoder with push button (Bourns PEC11R)
 # https://datasheet.octopart.com/PEC11R-4015F-S0024-Bourns-datasheet-68303416.pdf
 # The buttons are polled against a previous state.
 # The rotary button is polled against a previous state.
