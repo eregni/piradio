@@ -1,9 +1,9 @@
 #!/usr/bin/python3
 """
-Script to play radio streams on a raspberrypi pimped with an audiophonics sabre dac v3
-Controlled by two buttons. 1 to play next station and 1 to start/stop playing
-It runs as a systemd service and is started/stopped by polling a gpio pin in a separate bash script. (it's not the only pin being polled)
-A small display is used to show the current played track.
+Script to play radio streams on a raspberrypi pimped with an "audiophonics sabre dac v3" audio card
+Controlled by two buttons: 1 Rotary encoder with push button to select stations and one push button start/stop the radio
+A small lcd-display is used to show the current played track.
+It runs as a systemd service.
 
 Useful sources:
     arch arm config: https://archlinuxarm.org/platforms/armv7/broadcom/raspberry-pi-2
@@ -77,6 +77,7 @@ from radio_list import RADIO
 # Config ################################################################################
 AUDIO_DEVICE = 'alsa/hw:CARD=sndrpihifiberry'  # to check hw devices -> aplay -L
 SAVED_STATION = 'last_station.txt'  # save last opened station
+PIN_BTN_TOGGLE = 24
 PIN_BTN_ROTARY = 25
 PIN_ROTARY_DT = 5      # Momentary encoder A  TODO: what is the DT and CLK?
 PIN_ROTARY_CLK = 6     # Momentary encoder B
@@ -143,23 +144,22 @@ def save_last_station(filename, index_nr):
 
 
 # Global vars
-PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
-PLAYER.set_loglevel('error')
+RADIO_ACTIVE = False
+PLAYER: mpv.MPV
 LCD = Lcd()
 CURRENT_STATION = get_saved_station(SAVED_STATION)
-CURRENT_PLAYING = ""
+CURRENT_METADATA = ""
 LCD_SCROLL = False
 SCROLL_INDEX = 0
 SCROLL_TEXT = ""
 SCROLL_LOCK = time.time()
+BTN_TOGGLE_RADIO = Button(PIN_BTN_TOGGLE, pull_up=True, bounce_time=BTN_BOUNCE)
 BTN_SELECT = Button(PIN_BTN_ROTARY, pull_up=True, bounce_time=BTN_BOUNCE)
 BTN_ROTARY = RotaryEncoder(PIN_ROTARY_DT, PIN_ROTARY_CLK, bounce_time=BTN_BOUNCE, max_steps=len(RADIO) - 1)
 BTN_ROTARY.steps = 0
 SELECTOR_FLAG = False
 ROTARY_DIRECTION = True  # True is clockwise
 BTN_SELECT_FLAG = False
-
-
 # ##########################################################################################
 
 
@@ -168,11 +168,33 @@ def exit_program():
     """handler for atexit -> stop mpv player. clear lcd screen"""
     line = "#" * 75
     LOG.info(f"Atexit handler triggered. Exit program\n{line}\n")
+    stop_radio()
+    exit(0)
+
+
+def stop_radio():
+    """Stop the radio"""
+    global BTN_ROTARY
+    LOG.info("Stop player")
     LCD.lcd_clear()
     LCD_POWER.off()
     PLAYER.stop()
-    PLAYER.terminate()
-    exit(0)
+    PLAYER.terminate()  # todo What exactly is 'terminate' -> What happens with the PLAYER object?, Is terminate neccesary here or only for exit_program()
+    BTN_ROTARY.when_rotated_clockwise = None
+    BTN_ROTARY.when_rotated_clockwise = None
+    BTN_SELECT.when_pressed = None
+
+
+def start_radio():
+    """Start the radio"""
+    global PLAYER
+    LOG.info("Start player")
+    BTN_ROTARY.when_rotated_clockwise = btn_rotary_clockwise_handler
+    BTN_ROTARY.when_rotated_counter_clockwise = btn_rotary_counter_clockwise_handler
+    BTN_SELECT.when_pressed = btn_select_handler
+    PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
+    PLAYER.set_loglevel('error')
+    play_radio(get_current_station_url())
 
 
 def display_radio_name(name):
@@ -298,11 +320,19 @@ def play_radio(url):
 
 
 # Button handlers
+def btn_toggle_handler():
+    """Handler for the 'toggle radio' button"""
+    global RADIO_ACTIVE
+    LOG.debug("Button toggle radio pressed")
+    RADIO_ACTIVE = not RADIO_ACTIVE
+    start_radio() if RADIO_ACTIVE else stop_radio()
+
+
 def btn_select_handler():
     """Handler for push button from rotary encoder -> play next radio station"""
     global BTN_SELECT_FLAG
-    BTN_SELECT_FLAG = True
     LOG.debug("Btn_select pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
+    BTN_SELECT_FLAG = True
 
 
 def activate_station_selector(direction):
@@ -318,55 +348,55 @@ def activate_station_selector(direction):
 
 def btn_rotary_clockwise_handler():
     """Handler -> play next radio station"""
+    LOG.debug(f"Rotary encoder turned clockwise. counter = {BTN_ROTARY.steps}")
     activate_station_selector(direction=True)
-    LOG.debug(f"Rotary encoder turned clockwise. counter = {BTN_ROTARY.steps} {datetime.now().strftime('%H:%M:%S')}")
 
 
 def btn_rotary_counter_clockwise_handler():
     """Handler -> play next radio station"""
-    activate_station_selector(direction=False)
     LOG.debug(
-        f"Rotary encoder turned counter-clockwise. counter = {BTN_ROTARY.steps} {datetime.now().strftime('%H:%M:%S')}")
+        f"Rotary encoder turned counter-clockwise. counter = {BTN_ROTARY.steps}")
+    activate_station_selector(direction=False)
 # End Button handlers
 
 
-BTN_SELECT.when_pressed = btn_select_handler
-BTN_ROTARY.when_rotated_clockwise = btn_rotary_clockwise_handler
-BTN_ROTARY.when_rotated_counter_clockwise = btn_rotary_counter_clockwise_handler
+# Program
+LOG.info("Start program")
+BTN_TOGGLE_RADIO.when_pressed = btn_toggle_handler
 
-play_radio(get_current_station_url())
 while True:
-    try:
-        if BTN_SELECT_FLAG:
-            BTN_SELECT_FLAG = False
-            display_radio_name(get_current_station_name())
+    if RADIO_ACTIVE:
+        try:
+            if BTN_SELECT_FLAG:
+                BTN_SELECT_FLAG = False
+                display_radio_name(get_current_station_name())
 
-        if SELECTOR_FLAG:
-            LCD_SCROLL, SCROLL_TEXT, CURRENT_PLAYING = False, "", ""
+            if SELECTOR_FLAG:
+                LCD_SCROLL, SCROLL_TEXT, CURRENT_METADATA = False, "", ""
 
-            station_changed = select_station()
-            if station_changed:
-                play_radio(get_current_station_url())
+                station_changed = select_station()
+                if station_changed:
+                    play_radio(get_current_station_url())
 
-        if LCD_SCROLL and time.time() - SCROLL_LOCK > 0.5:
-            SCROLL_LOCK = time.time()
-            if SCROLL_INDEX == 0 or SCROLL_INDEX == len(SCROLL_TEXT) - 16:
-                # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
-                SCROLL_LOCK += 2
-            LCD.lcd_display_string(SCROLL_TEXT[SCROLL_INDEX: SCROLL_INDEX + 16], 2)
-            SCROLL_INDEX = 0 if SCROLL_INDEX >= len(SCROLL_TEXT) - 16 else SCROLL_INDEX + 1
+            if LCD_SCROLL and time.time() - SCROLL_LOCK > 0.5:
+                SCROLL_LOCK = time.time()
+                if SCROLL_INDEX == 0 or SCROLL_INDEX == len(SCROLL_TEXT) - 16:
+                    # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
+                    SCROLL_LOCK += 2
+                LCD.lcd_display_string(SCROLL_TEXT[SCROLL_INDEX: SCROLL_INDEX + 16], 2)
+                SCROLL_INDEX = 0 if SCROLL_INDEX >= len(SCROLL_TEXT) - 16 else SCROLL_INDEX + 1
 
-        if CURRENT_PLAYING != PLAYER.metadata['icy-title']:
-            LCD_SCROLL, SCROLL_TEXT = False, ""
-            CURRENT_PLAYING = PLAYER.metadata['icy-title']
-            if CURRENT_PLAYING != "":
-                display_icy_title(CURRENT_PLAYING)
+            if CURRENT_METADATA != PLAYER.metadata['icy-title']:
+                LCD_SCROLL, SCROLL_TEXT = False, ""
+                CURRENT_METADATA = PLAYER.metadata['icy-title']
+                if CURRENT_METADATA != "":
+                    display_icy_title(CURRENT_METADATA)
 
-    except (KeyError, TypeError):
-        # KeyError or TypeError could be triggered when 'icy-title' doesn't exist (or no station is playing)
-        pass
-    except mpv.ShutdownError:
-        LOG.error("ShutdownError from mpv")
-        exit_program()
+        except (KeyError, TypeError):
+            # KeyError or TypeError could be triggered when 'icy-title' doesn't exist (or no station is playing)
+            pass
+        except mpv.ShutdownError:
+            LOG.error("ShutdownError from mpv")
+            exit_program()
 
-    time.sleep(0.001)  # 10 times less cpu usage
+    time.sleep(0.001)
