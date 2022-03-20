@@ -19,8 +19,8 @@ Useful sources:
 
 HARDWARE:
 gpio buttons:
-    There is one rotary encoder with push button (Bourns PEC11R) and one push button. The rotary encoder is used to
-    select radio stations and the push button to toggle the radio.
+    There is one rotary encoder with push button (Bourns PEC11R-4015F-S0024) and one push button. The rotary encoder is
+    used to select radio stations and the push button to toggle the radio.
     https://datasheet.octopart.com/PEC11R-4015F-S0024-Bourns-datasheet-68303416.pdf
 Lcd screen:
     A 16x2 lcd screen to display radio station names and icecast-info.
