@@ -82,7 +82,7 @@ PIN_BTN_ROTARY = 25
 PIN_ROTARY_DT = 5      # Momentary encoder A  TODO: what is the DT and CLK?
 PIN_ROTARY_CLK = 6     # Momentary encoder B
 LCD_POWER_PIN = 16
-LOG_LEVEL = logging.DEBUG
+LOG_LEVEL = logging.INFO
 BTN_BOUNCE = 0.05  # Button debounce time in seconds
 # End config ################################################################################
 
@@ -107,7 +107,6 @@ LOG.setLevel(LOG_LEVEL)
 
 # turn on lcd
 LCD_POWER = OutputDevice(LCD_POWER_PIN)
-LCD_POWER.on()
 
 
 def mpv_log(loglevel, component, message):
@@ -145,7 +144,9 @@ def save_last_station(filename, index_nr):
 
 # Global vars
 RADIO_ACTIVE = False
-PLAYER: mpv.MPV
+PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
+PLAYER.set_loglevel('error')
+LCD_POWER.on()
 LCD = Lcd()
 CURRENT_STATION = get_saved_station(SAVED_STATION)
 CURRENT_METADATA = ""
@@ -166,9 +167,9 @@ BTN_SELECT_FLAG = False
 @atexit.register
 def exit_program():
     """handler for atexit -> stop mpv player. clear lcd screen"""
+    stop_radio()
     line = "#" * 75
     LOG.info(f"Atexit handler triggered. Exit program\n{line}\n")
-    stop_radio()
     exit(0)
 
 
@@ -177,9 +178,8 @@ def stop_radio():
     global BTN_ROTARY
     LOG.info("Stop player")
     LCD.lcd_clear()
-    LCD_POWER.off()
     PLAYER.stop()
-    PLAYER.terminate()  # todo What exactly is 'terminate' -> What happens with the PLAYER object?, Is terminate neccesary here or only for exit_program()
+    #PLAYER.terminate()  # todo What exactly is 'terminate' -> What happens with the PLAYER object?, Is terminate neccesary here or only for exit_program()
     BTN_ROTARY.when_rotated_clockwise = None
     BTN_ROTARY.when_rotated_clockwise = None
     BTN_SELECT.when_pressed = None
@@ -192,9 +192,7 @@ def start_radio():
     BTN_ROTARY.when_rotated_clockwise = btn_rotary_clockwise_handler
     BTN_ROTARY.when_rotated_counter_clockwise = btn_rotary_counter_clockwise_handler
     BTN_SELECT.when_pressed = btn_select_handler
-    PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
-    PLAYER.set_loglevel('error')
-    play_radio(get_current_station_url())
+    play_radio(get_current_station_name(), get_current_station_url())
 
 
 def display_radio_name(name):
@@ -296,9 +294,10 @@ def switch_station():
     return RADIO[CURRENT_STATION]
 
 
-def play_radio(url):
+def play_radio(radio_name, url):
     """
     Start playing url. Display error message when PLAYER is still idle after n seconds
+    @param radio_name: str
     @param url: str
     """
     timestamp = time.time()
@@ -316,7 +315,7 @@ def play_radio(url):
     if not PLAYER.core_idle:
         display_radio_name(get_current_station_name())
         save_last_station(SAVED_STATION, CURRENT_STATION)
-        LOG.info(f"Radio stream started: {url}")
+        LOG.info(f"Radio stream started: {radio_name} - {url}")
 
 
 # Button handlers
@@ -376,7 +375,7 @@ while True:
 
                 station_changed = select_station()
                 if station_changed:
-                    play_radio(get_current_station_url())
+                    play_radio(get_current_station_name(), get_current_station_url())
 
             if LCD_SCROLL and time.time() - SCROLL_LOCK > 0.5:
                 SCROLL_LOCK = time.time()
