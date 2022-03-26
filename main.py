@@ -1,8 +1,8 @@
 #!/usr/bin/python3
 """
-Script to play radio streams on a raspberrypi pimped with an "audiophonics sabre dac v3" audio card
+Script to play radio streams on a raspberrypi, pimped with an "audiophonics sabre dac v3" audio card
 Controlled by two buttons: 1 Rotary encoder with push button to select stations and one push button start/stop the radio
-A small lcd-display is used to show the current played track.
+An 16x2 lcd-display is used to show the radio and track information.
 It runs as a systemd service.
 
 Useful sources:
@@ -19,8 +19,8 @@ Useful sources:
 
 HARDWARE:
 gpio buttons:
-    There is one rotary encoder with push button (Bourns PEC11R-4015F-S0024) and one push button. The rotary encoder is
-    used to select radio stations and the push button to toggle the radio.
+    There is one rotary encoder with a push button (Bourns PEC11R-4015F-S0024) and one regular push button.
+    The rotary encoder is used to select radio stations and the push button to toggle the radio.
     https://datasheet.octopart.com/PEC11R-4015F-S0024-Bourns-datasheet-68303416.pdf
 Lcd screen:
     A 16x2 lcd screen to display radio station names and icecast-info.
@@ -79,8 +79,8 @@ AUDIO_DEVICE = 'alsa/hw:CARD=sndrpihifiberry'  # to check hw devices -> aplay -L
 SAVED_STATION = 'last_station.txt'  # save last opened station
 PIN_BTN_TOGGLE = 24
 PIN_BTN_ROTARY = 25
-PIN_ROTARY_DT = 5      # Momentary encoder A  TODO: what is the DT and CLK?
-PIN_ROTARY_CLK = 6     # Momentary encoder B
+PIN_ROTARY_DT = 5      # Momentary encoder DT
+PIN_ROTARY_CLK = 6     # Momentary encoder CLK
 LCD_POWER_PIN = 16
 LOG_LEVEL = logging.INFO
 BTN_BOUNCE = 0.05  # Button debounce time in seconds
@@ -104,9 +104,6 @@ if LOG_LEVEL == logging.DEBUG:
     LOG.addHandler(LOG_HANDLER_CONSOLE)
 LOG.setLevel(LOG_LEVEL)
 # End logging config #######################################################################
-
-# turn on lcd
-LCD_POWER = OutputDevice(LCD_POWER_PIN)
 
 
 def mpv_log(loglevel, component, message):
@@ -144,9 +141,10 @@ def save_last_station(filename, index_nr):
 
 # Global vars
 RADIO_ACTIVE = False
-PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE)
+PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE, ytdl=False)
 PLAYER.set_loglevel('error')
-LCD_POWER.on()
+LCD_POWER = OutputDevice(LCD_POWER_PIN)
+LCD_POWER.on()  # turn on lcd
 LCD = Lcd()
 CURRENT_STATION = get_saved_station(SAVED_STATION)
 CURRENT_METADATA = ""
@@ -175,11 +173,10 @@ def exit_program():
 
 def stop_radio():
     """Stop the radio"""
-    global BTN_ROTARY
+    global BTN_ROTARY, BTN_SELECT
     LOG.info("Stop player")
     LCD.lcd_clear()
     PLAYER.stop()
-    #PLAYER.terminate()  # todo What exactly is 'terminate' -> What happens with the PLAYER object?, Is terminate neccesary here or only for exit_program()
     BTN_ROTARY.when_rotated_clockwise = None
     BTN_ROTARY.when_rotated_clockwise = None
     BTN_SELECT.when_pressed = None
@@ -187,20 +184,19 @@ def stop_radio():
 
 def start_radio():
     """Start the radio"""
-    global PLAYER
     LOG.info("Start player")
     BTN_ROTARY.when_rotated_clockwise = btn_rotary_clockwise_handler
     BTN_ROTARY.when_rotated_counter_clockwise = btn_rotary_counter_clockwise_handler
     BTN_SELECT.when_pressed = btn_select_handler
-    play_radio(get_current_station_name(), get_current_station_url())
+    play_radio(RADIO[CURRENT_STATION])
 
 
-def display_radio_name(name):
+def display_radio_name(radio):
     """
     Display radio name on lcd
-    @type name: string, radio name to print on display
+    @type radio: Radio
     """
-    wrap = textwrap.wrap(name, 16)
+    wrap = textwrap.wrap(radio.name, 16)
     LCD.lcd_clear()
     LCD.lcd_display_string(wrap[0], 1)
     if len(wrap) > 1:
@@ -249,13 +245,13 @@ def select_station():
     SELECTOR_FLAG = False
     timestamp = time.time()
     new_station = switch_station()
-    display_radio_name(new_station[0])
+    display_radio_name(new_station)
     new_station_selected = True
     while time.time() - timestamp <= 3:
         if SELECTOR_FLAG:
             SELECTOR_FLAG, timestamp = False, time.time()
             new_station = switch_station()
-            display_radio_name(new_station[0])
+            display_radio_name(new_station)
             new_station_selected = True if new_station != CURRENT_STATION else False
         if BTN_SELECT_FLAG:
             BTN_SELECT_FLAG = False
@@ -264,26 +260,10 @@ def select_station():
     return new_station_selected
 
 
-def get_current_station_name():
-    """
-    Get radio current name from RADIO List
-    @return: Tuple[str, str], Radio name, Radio url
-    """
-    return RADIO[CURRENT_STATION][0]
-
-
-def get_current_station_url():
-    """
-    Get radio current name from RADIO List
-    @return: Tuple[str, str], Radio name, Radio url
-    """
-    return RADIO[CURRENT_STATION][1]
-
-
 def switch_station():
     """
     Switch station. Update CURRENT_STATION based on the value from ROTARY_DIRECTION
-    @return: List(Tuple), station from RADIO
+    @return: Radio, Radio from RADIO
     """
     global CURRENT_STATION
     if ROTARY_DIRECTION:
@@ -294,14 +274,13 @@ def switch_station():
     return RADIO[CURRENT_STATION]
 
 
-def play_radio(radio_name, url):
+def play_radio(radio):
     """
     Start playing url. Display error message when PLAYER is still idle after n seconds
-    @param radio_name: str
-    @param url: str
+    @param radio: Radio
     """
     timestamp = time.time()
-    PLAYER.play(url)
+    PLAYER.play(radio.url)
     LCD.lcd_clear()
     LCD.lcd_display_string("Tuning...", 1)
     while PLAYER.core_idle:
@@ -309,13 +288,12 @@ def play_radio(radio_name, url):
             LOG.error("Cannot start radio")
             LCD.lcd_display_string("ERROR: cannot", 1)
             LCD.lcd_display_string("start playing", 2)
-            # todo what happens when MPV is not starting? (timeout?)
             break
 
     if not PLAYER.core_idle:
-        display_radio_name(get_current_station_name())
+        display_radio_name(radio.name)
         save_last_station(SAVED_STATION, CURRENT_STATION)
-        LOG.info(f"Radio stream started: {radio_name} - {url}")
+        LOG.info(f"Radio stream started: {radio.name} - {radio.url}")
 
 
 # Button handlers
@@ -328,7 +306,7 @@ def btn_toggle_handler():
 
 
 def btn_select_handler():
-    """Handler for push button from rotary encoder -> play next radio station"""
+    """Handler for the 'select button' (from rotary encoder)"""
     global BTN_SELECT_FLAG
     LOG.debug("Btn_select pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
     BTN_SELECT_FLAG = True
@@ -368,14 +346,14 @@ while True:
         try:
             if BTN_SELECT_FLAG:
                 BTN_SELECT_FLAG = False
-                display_radio_name(get_current_station_name())
+                display_radio_name(RADIO[CURRENT_STATION])
 
             if SELECTOR_FLAG:
                 LCD_SCROLL, SCROLL_TEXT, CURRENT_METADATA = False, "", ""
 
                 station_changed = select_station()
                 if station_changed:
-                    play_radio(get_current_station_name(), get_current_station_url())
+                    play_radio(RADIO[CURRENT_STATION])
 
             if LCD_SCROLL and time.time() - SCROLL_LOCK > 0.5:
                 SCROLL_LOCK = time.time()
