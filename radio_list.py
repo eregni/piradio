@@ -1,4 +1,4 @@
-#  List containing selectable radio stations
+#  Collection with selectable radio stations
 from dataclasses import dataclass
 
 @dataclass
@@ -7,7 +7,7 @@ class Radio:
     url: str
 
 
-RADIO = (
+RADIO_LIST = (
     Radio('Vrt NWS', 'http://progressive-audio.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'),
     Radio('Radio 1', 'http://icecast.vrtcdn.be/radio1.aac'),
     Radio('Radio 1 Classics', 'http://icecast.vrtcdn.be/radio1_classics.aac'),
