@@ -1,10 +1,13 @@
-# ORIGINAL SOURCE: https://github.com/the-raspberry-pi-guy/lcd.git
+"""
+Control module for the lcd screen
+ORIGINAL SOURCE: https://github.com/the-raspberry-pi-guy/lcd.git
+"""
+import logging
 import textwrap
+from time import sleep, time
+from typing import List
 from smbus import SMBus
 from RPi.GPIO import RPI_REVISION
-from time import sleep, time
-import logging
-
 
 LOG = logging.getLogger(__name__)
 
@@ -62,45 +65,45 @@ Rs = 0b00000001  # Register select bit
 
 
 class I2CDevice:
-    def __init__(self, addr=None, bus=BUS_NUMBER):
+    def __init__(self, addr: int, bus: int = BUS_NUMBER):
         self.addr = addr
         self.bus = SMBus(bus)
 
     # write a single command
-    def write_cmd(self, cmd):
+    def write_cmd(self, cmd: int):
         self.bus.write_byte(self.addr, cmd)
         sleep(0.0001)
 
     # write a command and argument
-    def write_cmd_arg(self, cmd, data):
+    def write_cmd_arg(self, cmd: int, data: int):
         self.bus.write_byte_data(self.addr, cmd, data)
         sleep(0.0001)
 
     # write a block of data
-    def write_block_data(self, cmd, data):
+    def write_block_data(self, cmd: int, data: int):
         self.bus.write_block_data(self.addr, cmd, data)
         sleep(0.0001)
 
     # read a single byte
-    def read(self):
+    def read(self) -> int:
         return self.bus.read_byte(self.addr)
 
     # read
-    def read_data(self, cmd):
+    def read_data(self, cmd: int) -> int:
         return self.bus.read_byte_data(self.addr, cmd)
 
     # read a block of data
-    def read_block_data(self, cmd):
+    def read_block_data(self, cmd: int) -> int:
         return self.bus.read_block_data(self.addr, cmd)
 
 
 class Lcd:
     def __init__(self):
-        self.scroll_text = ""
-        self._scroll_index = 0
-        self._scroll_lock = time()
+        self.scroll_text: str = ""
+        self._scroll_index: int = 0
+        self._scroll_lock: float = time()
 
-        self.lcd = I2CDevice(addr=ADDR)
+        self._lcd = I2CDevice(addr=ADDR)
         self._lcd_write(0x03)
         self._lcd_write(0x03)
         self._lcd_write(0x03)
@@ -111,7 +114,7 @@ class Lcd:
         self._lcd_write(LCD_ENTRYMODESET | LCD_ENTRYLEFT)
         sleep(0.2)
 
-    def display_radio_name(self, name):
+    def display_radio_name(self, name: str):
         """
         Display radio name on lcd
         @type name: string, radio name to print on display
@@ -122,7 +125,7 @@ class Lcd:
         if len(wrap) > 1:
             self.lcd_display_string(wrap[1], 2)
 
-    def display_icy_title(self, title):
+    def display_icy_title(self, title: str):
         """
         Display icy-title on lcd. Activate scrolling when there are more than 2 lines to be displayed
         @param title: string title to display
@@ -130,13 +133,13 @@ class Lcd:
         lines = textwrap.wrap(title, 16)
         self.clear()
         self.lcd_display_string(lines[0], 1)
-        LOG.debug(f"New icy-title: {title}")
+        LOG.debug("New icy-title: %s", title)
         if len(lines) == 2:
             self.lcd_display_string(lines[1], 2)
         elif len(lines) > 2:
             self.set_up_scrolling(lines)
 
-    def lcd_display_string(self, string, line):
+    def lcd_display_string(self, string: str, line: int):
         """
         Print string on lcd screen
         @param string: str
@@ -159,14 +162,14 @@ class Lcd:
         self._lcd_write(LCD_RETURNHOME)
 
     # backlight control (on/off)
-    # options: lcd_backlight(1) = ON, lcd_backlight(0) = OFF
-    def lcd_backlight(self, state):
-        if state == 1:
-            self.lcd.write_cmd(LCD_BACKLIGHT)
-        elif state == 0:
-            self.lcd.write_cmd(LCD_NOBACKLIGHT)
+    def lcd_backlight(self, active: bool):
+        """Activate/Deactivate backlight"""
+        if active:
+            self._lcd.write_cmd(LCD_BACKLIGHT)
+        else:
+            self._lcd.write_cmd(LCD_NOBACKLIGHT)
 
-    def set_up_scrolling(self, lines):
+    def set_up_scrolling(self, lines: List[str]):
         """
         Activate scrolling and set up the SCROLL_TEXT
         @param lines: List[str] -> textwrap.wrap()
@@ -182,7 +185,7 @@ class Lcd:
         """Scroll text one step"""
         if time() - self._scroll_lock > 0.5:
             self._scroll_lock = time()
-        if self._scroll_index == 0 or self._scroll_index == len(self.scroll_text) - 16:
+        if self._scroll_index in [0, len(self.scroll_text) - 16]:
             # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
             self._scroll_lock += 2
 
@@ -195,18 +198,17 @@ class Lcd:
         self.scroll_text = ""
 
     # clocks EN to latch command
-    def _lcd_strobe(self, data):
-        self.lcd.write_cmd(data | En | LCD_BACKLIGHT)
+    def _lcd_strobe(self, data: int):
+        self._lcd.write_cmd(data | En | LCD_BACKLIGHT)
         sleep(.0005)
-        self.lcd.write_cmd(((data & ~En) | LCD_BACKLIGHT))
+        self._lcd.write_cmd(((data & ~En) | LCD_BACKLIGHT))
         sleep(.0001)
 
-    def _lcd_write_four_bits(self, data):
-        self.lcd.write_cmd(data | LCD_BACKLIGHT)
+    def _lcd_write_four_bits(self, data: int):
+        self._lcd.write_cmd(data | LCD_BACKLIGHT)
         self._lcd_strobe(data)
 
     # write a command to lcd
-    def _lcd_write(self, cmd, mode=0):
+    def _lcd_write(self, cmd: int, mode: int = 0):
         self._lcd_write_four_bits(mode | (cmd & 0xF0))
         self._lcd_write_four_bits(mode | ((cmd << 4) & 0xF0))
-

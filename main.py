@@ -8,7 +8,8 @@ It runs as a systemd service.
 
 Useful sources:
     arch arm config: https://archlinuxarm.org/platforms/armv7/broadcom/raspberry-pi-2
-    run gpio as non-root: https://arcanesciencelab.wordpress.com/2016/03/31/running-rpi3-applications-that-use-gpio-without-being-root/
+    run gpio as non-root:
+        https://arcanesciencelab.wordpress.com/2016/03/31/running-rpi3-applications-that-use-gpio-without-being-root/
     radio stream url's: https://hendrikjansen.nl/henk/streaming1.html#wl
     python-mpv: https://github.com/jaseg/python-mpv
     audiophonics sabre dac v3: https://www.audiophonics.fr/en/index.php?controller=attachment&id_attachment=208
@@ -52,7 +53,8 @@ drivers:
 
 the user needs to be in the 'audio' group
 
-i2c group and permission settings (https://arcanesciencelab.wordpress.com/2014/02/02/bringing-up-i2c-on-the-raspberry-pi-with-arch-linux/)
+i2c group and permission settings
+    (https://arcanesciencelab.wordpress.com/2014/02/02/bringing-up-i2c-on-the-raspberry-pi-with-arch-linux/)
     # groupadd i2c
     # usermod -aG i2c [username]
     # echo 'KERNEL=="i2c-[0-9]*", GROUP="i2c"' >> /etc/udev/rules.d/raspberrypi.rules
@@ -60,27 +62,28 @@ i2c group and permission settings (https://arcanesciencelab.wordpress.com/2014/0
 i2c speed
     dtparam=i2c_arm=on,i2c_arm_baudrate=400000 -> /boot/config.txt
 
-atexit module catches SIGINT. You need to specify the kill signal in the systemd service since it sends by default SIGTERM
+atexit module catches SIGINT.
+    You need to specify the kill signal in the systemd service since it sends by default SIGTERM
     -> KillSignal=SIGINT
 """
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
 import atexit
-import time
-from sys import exit
+from time import time, sleep
+from datetime import datetime
 from gpiozero import Button, OutputDevice, RotaryEncoder
 import mpv
-from datetime import datetime
 from lcd_screen import Lcd
-from radio_list import RADIO_LIST, Radio
+from radio_list import RADIO_LIST, Station
 
 # Config ################################################################################
 AUDIO_DEVICE = 'alsa/hw:CARD=sndrpihifiberry'  # to check hw devices -> aplay -L
 SAVED_STATION = 'last_station.txt'  # save last opened station
 PIN_BTN_TOGGLE = 24
 PIN_BTN_ROTARY = 25
-PIN_ROTARY_DT = 5      # Momentary encoder DT
-PIN_ROTARY_CLK = 6     # Momentary encoder CLK
+PIN_ROTARY_DT = 5  # Momentary encoder DT
+PIN_ROTARY_CLK = 6  # Momentary encoder CLK
 LCD_POWER_PIN = 16
 LOG_LEVEL = logging.INFO
 BTN_BOUNCE = 0.05  # Button debounce time in seconds
@@ -105,39 +108,42 @@ if LOG_LEVEL == logging.DEBUG:
 LOG.setLevel(LOG_LEVEL)
 # End logging config #######################################################################
 
+LCD_POWER = OutputDevice(LCD_POWER_PIN)
+LCD_POWER.on()  # turn on lcd
 
-def mpv_log(loglevel, component, message):
+
+def mpv_log(loglevel: str, component: str, message: str):
     """Log handler for the python-mpv.MPV instance"""
-    LOG.warning('[python-mpv] [{}] {}: {}'.format(loglevel, component, message))
+    LOG.warning('[python-mpv] [%s] %s: %s', loglevel, component, message)
 
 
-def get_saved_station(filename):
+def get_saved_station(filename: str) -> Station:
     """
     Get saved RADIO index nr
     @param filename: str, file name
     @return: Radio
     """
     try:
-        with open(filename, 'r') as f:
-            index = int(f.readline())
-        LOG.debug(f"Retrieving saved last radio index: {index}")
-    except (FileNotFoundError, BaseException):
+        with open(filename, 'r', encoding='utf-8') as file:
+            index = int(file.readline())
+        LOG.debug("Retrieving saved last radio index: %s",index)
+    except FileNotFoundError:
         index = 0
         LOG.warning("Error while reading saved playlist index nr. Getting first item instead")
 
     return RADIO_LIST[index]
 
 
-def save_last_station(filename, radio):
+def save_last_station(filename: str, radio: Station):
     """
     Save station RADIO index to file
     @param filename: str, file name
     @param radio: Radio
     """
     index = RADIO_LIST.index(radio)
-    with open(filename, 'w') as f:
-        f.write(str(index))
-    LOG.debug(f"Saved RADIO index {index} to file")
+    with open(filename, 'w', encoding='utf-8') as file:
+        file.write(str(index))
+    LOG.debug("Saved RADIO index %s to file", index)
 
 
 @atexit.register
@@ -145,21 +151,24 @@ def exit_program():
     """handler for atexit -> stop mpv player. clear lcd screen"""
     Radio.stop()
     line = "#" * 75
-    LOG.info(f"Atexit handler triggered. Exit program\n{line}\n")
-    exit(0)
+    LOG.info("Atexit handler triggered. Exit program\n%s\n", line)
+    sys.exit(0)
 
 
 # Button handlers
 def btn_toggle_handler():
     """Handler for the 'toggle radio' button"""
     LOG.debug("Button toggle radio pressed")
-    Radio.active = not Radio.active
-    Radio.start() if Radio.active else Radio.stop()
+    Station.active = not Station.active
+    if Station.active:
+        Radio.start()
+    else:
+        Radio.stop()
 
 
 def btn_select_handler():
     """Handler for push button from rotary encoder -> play next radio station"""
-    LOG.debug("Btn_select pressed {0}".format(datetime.now().strftime("%H:%M:%S")))
+    LOG.debug("Btn_select pressed %s", datetime.now().strftime("%H:%M:%S"))
     ButtonPanel.btn_select_flag = True
 
 
@@ -175,30 +184,29 @@ def activate_station_selector(direction):
 
 def btn_rotary_clockwise_handler():
     """Handler -> play next radio station"""
-    LOG.debug(f"Rotary encoder turned clockwise. counter = {ButtonPanel.button_rotary.steps}")
+    LOG.debug("Rotary encoder turned clockwise. counter = %s", ButtonPanel.button_rotary.steps)
     activate_station_selector(direction=True)
 
 
 def btn_rotary_counter_clockwise_handler():
     """Handler -> play next radio station"""
-    LOG.debug(
-        f"Rotary encoder turned counter-clockwise. counter = {ButtonPanel.button_rotary.steps}")
+    LOG.debug("Rotary encoder turned counter-clockwise. counter = %s", ButtonPanel.button_rotary.steps)
     activate_station_selector(direction=False)
+
+
 # End Button handlers
 
-
-LCD_POWER = OutputDevice(LCD_POWER_PIN)
-LCD_POWER.on()  # turn on lcd
 
 # Global vars
 PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE, ytdl=False)
 PLAYER.set_loglevel('error')
 LCD = Lcd()
 
+
 class Radio:
-    active = False
-    station = get_saved_station(SAVED_STATION)
-    metadata = ""
+    active: bool = False
+    station: Station = get_saved_station(SAVED_STATION)
+    metadata: str = ""
 
     @staticmethod
     def stop():
@@ -213,28 +221,27 @@ class Radio:
         """Start the radio"""
         LOG.info("Start player")
         ButtonPanel.enable()
-        Radio.play(Radio.station)
+        Radio.play()
 
     @staticmethod
-    def select_station():
+    def select_station() -> bool:
         """
         This function should be called by the rotary encoder (ButtonPanel.btn_select_flag raised).
         Display the next (or previous) station name on lcd.
         If you push the rotary encoder OR wait for 3 seconds, the current displayed station will start playing.
-        new value will be set in CURRENT_STATION.
-        @return: bool, True if the value of CURRENT_STATION has changed. Should only return False when the user selects the
-        same station as CURRENT_STATION -> Don't start a stream if it's already playing...
+        @return: bool, True if the value of Radio.station has changed.
+        Should only return False when the user selects the station which is already playing.
         """
-        timestamp = time.time()
+        timestamp = time()
         new_station = Radio.switch_station()
         LCD.display_radio_name(new_station.name)
         new_station_selected = True
-        while time.time() - timestamp <= 3:
+        while time() - timestamp <= 3:
             if ButtonPanel.btn_select_flag:
-                ButtonPanel.btn_select_flag, timestamp = False, time.time()
+                ButtonPanel.btn_select_flag, timestamp = False, time()
                 new_station = Radio.switch_station()
-                LCD.display_radio_name(new_station[0])
-                new_station_selected = True if new_station != Radio.station else False
+                LCD.display_radio_name(new_station.name)
+                new_station_selected = bool(new_station != Radio.station)
             if ButtonPanel.btn_select_flag:
                 ButtonPanel.btn_select_flag = False
                 break
@@ -242,61 +249,63 @@ class Radio:
         return new_station_selected
 
     @staticmethod
-    def switch_station():
+    def switch_station() -> Station:
         """
         Switch station. Update Radio.station based on the value from ButtonPanel.rotary_direction
-        @return: Radio from RADIO_LIST
+        @return: Radio. New selected Radio from RADIO_LIST
         """
-        index = RADIO_LIST.index(Radio.station)
+        index = RADIO_LIST.index(Station.station)
         if ButtonPanel.rotary_direction:
             index = 0 if index == len(RADIO_LIST) - 1 else index + 1
         else:
             index = len(RADIO_LIST) - 1 if index == 0 else index - 1
 
-        Radio.station = RADIO_LIST[index]
+        Station.station = RADIO_LIST[index]
         return RADIO_LIST[index]
 
     @staticmethod
-    def play(radio):
+    def play():
         """
-        Start playing. Display error message when PLAYER is still idle after n seconds
-        @param radio: Radio
+        Start playing current station from Radio. Display error message when PLAYER is still idle after n seconds
         """
-        timestamp = time.time()
-        PLAYER.play(radio.url)
+        timestamp = time()
+        PLAYER.play(Radio.station.url)
         LCD.clear()
         LCD.lcd_display_string("Tuning...", 1)
         while PLAYER.core_idle:
-            if time.time() - timestamp >= 60:
+            if time() - timestamp >= 60:
                 LOG.error("Cannot start radio")
                 LCD.lcd_display_string("ERROR: cannot", 1)
                 LCD.lcd_display_string("start playing", 2)
                 break
 
         if not PLAYER.core_idle:
-            LCD.display_radio_name(radio.name)
+            LCD.display_radio_name(Radio.station.name)
             save_last_station(SAVED_STATION, Radio.station)
-            LOG.info(f"Radio stream started: {radio.name} - {radio.url}")
+            LOG.info("Radio stream started: %s - %s", Radio.station.name, Radio.station.url)
 
 
 class ButtonPanel:
-    button_toggle_radio = Button(PIN_BTN_TOGGLE, pull_up=True, bounce_time=BTN_BOUNCE)
+    button_toggle_radio: Button = Button(PIN_BTN_TOGGLE, pull_up=True, bounce_time=BTN_BOUNCE)
     button_toggle_radio.when_pressed = btn_toggle_handler  # always enabled
-    button_select = Button(PIN_BTN_ROTARY, pull_up=True, bounce_time=BTN_BOUNCE)
-    button_rotary = RotaryEncoder(PIN_ROTARY_DT, PIN_ROTARY_CLK, bounce_time=BTN_BOUNCE, max_steps=len(RADIO_LIST) - 1)
+    button_select: Button = Button(PIN_BTN_ROTARY, pull_up=True, bounce_time=BTN_BOUNCE)
+    button_rotary: RotaryEncoder = RotaryEncoder(PIN_ROTARY_DT, PIN_ROTARY_CLK, bounce_time=BTN_BOUNCE,
+                                                 max_steps=len(RADIO_LIST) - 1)
     button_rotary.steps = 0
-    rotary_direction = True  # True is clockwise, False is counterclockwise
-    rotary_twist_flag = False
-    btn_select_flag = False
+    rotary_direction: bool = True  # True is clockwise, False is counterclockwise
+    rotary_twist_flag: bool = False
+    btn_select_flag: bool = False
 
     @staticmethod
     def enable():
+        """Connect handlers to buttons"""
         ButtonPanel.button_rotary.when_rotated_clockwise = btn_rotary_clockwise_handler
         ButtonPanel.button_rotary.when_rotated_counter_clockwise = btn_rotary_counter_clockwise_handler
         ButtonPanel.button_select.when_pressed = btn_select_handler
 
     @staticmethod
     def disable():
+        """Disconnect button handlers"""
         ButtonPanel.when_rotated_clockwise = None
         ButtonPanel.when_rotated_counter_clockwise = None
         ButtonPanel.button_select.when_pressed = None
@@ -310,7 +319,7 @@ while True:
             # handle button press from rotary encoder
             if ButtonPanel.btn_select_flag:
                 ButtonPanel.btn_select_flag = False
-                LCD.display_radio_name(Radio.station)
+                LCD.display_radio_name(Radio.station.name)
 
             # handle twist from rotary encoder
             if ButtonPanel.rotary_twist_flag:
@@ -319,7 +328,7 @@ while True:
                 Radio.metadata = ""
                 station_changed = Radio.select_station()
                 if station_changed:
-                    Radio.play(Radio.station)
+                    Radio.play()
 
             # Update lcd text when scrolling is active
             if LCD.scroll_text:
@@ -334,7 +343,7 @@ while True:
 
             # if, for any reason, MPV player stopped, restart it
             if PLAYER.core_idle:
-                Radio.play(Radio.station)
+                Radio.play()
 
         except (KeyError, TypeError):
             # KeyError or TypeError could be triggered when 'icy-title' doesn't exist (or no station is playing)
@@ -343,4 +352,4 @@ while True:
             LOG.error("ShutdownError from mpv")
             exit_program()
 
-    time.sleep(0.0001)
+    sleep(0.001)
