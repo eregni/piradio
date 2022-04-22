@@ -220,6 +220,7 @@ class Radio:
     def start():
         """Start the radio"""
         LOG.info("Start player")
+        LCD.clear()
         LCD.lcd_backlight(True)
         ButtonPanel.enable()
         Radio.play()
@@ -288,7 +289,7 @@ class Radio:
 
     @staticmethod
     def update_metadata():
-        """Update the metadata on the lcd screen"""
+        """Update the metadata on the lcd screen if necessary"""
         if Radio.metadata != PLAYER.metadata['icy-title']:
             LCD.scroll_text = ""
             Radio.metadata = PLAYER.metadata['icy-title']
@@ -324,9 +325,16 @@ class ButtonPanel:
 
 # Program
 LOG.info("Start program")
+# TODO DEBUG
+# Radio.active = True
+# Radio.play()
+
 while True:
     if Radio.active:
         try:
+            if PLAYER.core_idle:
+                Radio.play()
+
             # handle button press from rotary encoder
             if ButtonPanel.btn_select_flag:
                 ButtonPanel.btn_select_flag = False
@@ -346,12 +354,8 @@ while True:
                 LCD.scroll()
 
             # Check metadata
-            if 'icy-title' in Radio.metadata:
+            if PLAYER.metadata is not None and 'icy-title' in PLAYER.metadata:
                 Radio.update_metadata()
-
-            # if, for any reason, MPV player stopped, restart it
-            if PLAYER.core_idle:
-                Radio.play()
 
         except mpv.ShutdownError:
             LOG.error("ShutdownError from mpv")

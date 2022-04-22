@@ -6,6 +6,7 @@ import logging
 import textwrap
 from time import sleep, time
 from typing import List
+from threading import Lock
 from smbus import SMBus
 from RPi.GPIO import RPI_REVISION
 
@@ -99,7 +100,9 @@ class I2CDevice:
 
 class Lcd:
     def __init__(self):
+        self.lock: Lock = Lock()
         self.scroll_text: str = ""
+        self.locked: bool = False
         self._scroll_index: int = 0
         self._scroll_lock: float = time()
 
@@ -145,6 +148,12 @@ class Lcd:
         @param string: str
         @param line: put string on specified line nr
         """
+        LOG.info("DISPLAY LOCK STATE: %s", self.lock.locked())
+        LOG.info("DISPLAY NEW STRING: %s", string)
+        if self.lock.locked():
+            return
+
+        self.lock.acquire()
         if line == 1:
             self._lcd_write(0x80)
         if line == 2:
@@ -155,6 +164,7 @@ class Lcd:
             self._lcd_write(0xD4)
         for char in string:
             self._lcd_write(ord(char), Rs)
+        self.lock.release()
 
     def clear(self):
         """Clear lcd and set to home"""
@@ -182,8 +192,10 @@ class Lcd:
 
     def scroll(self):
         """Scroll text one step"""
-        if time() - self._scroll_lock > 0.5:
-            self._scroll_lock = time()
+        if time() - self._scroll_lock < 0.5:
+            return
+
+        self._scroll_lock = time()
         if self._scroll_index in [0, len(self.scroll_text) - 16]:
             # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
             self._scroll_lock += 2
