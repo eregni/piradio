@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-# todo use lcd_backlight function from lcd_screen
 """
 Script to play radio streams on a raspberrypi, pimped with an "audiophonics sabre dac v3" audio card
 Controlled by two buttons: 1 Rotary encoder with push button to select stations and one push button start/stop the radio
@@ -75,7 +74,7 @@ from datetime import datetime
 from gpiozero import Button, OutputDevice, RotaryEncoder
 import mpv
 from lcd_screen import Lcd
-from radio_list import RADIO_LIST, Station
+from station_list import STATION_LIST, Station
 
 # Config ################################################################################
 AUDIO_DEVICE = 'alsa/hw:CARD=sndrpihifiberry'  # to check hw devices -> aplay -L
@@ -108,9 +107,6 @@ if LOG_LEVEL == logging.DEBUG:
 LOG.setLevel(LOG_LEVEL)
 # End logging config #######################################################################
 
-LCD_POWER = OutputDevice(LCD_POWER_PIN)
-LCD_POWER.on()  # turn on lcd
-
 
 def mpv_log(loglevel: str, component: str, message: str):
     """Log handler for the python-mpv.MPV instance"""
@@ -121,7 +117,7 @@ def get_saved_station(filename: str) -> Station:
     """
     Get saved RADIO index nr
     @param filename: str, file name
-    @return: Radio
+    @return: Station
     """
     try:
         with open(filename, 'r', encoding='utf-8') as file:
@@ -131,16 +127,16 @@ def get_saved_station(filename: str) -> Station:
         index = 0
         LOG.warning("Error while reading saved playlist index nr. Getting first item instead")
 
-    return RADIO_LIST[index]
+    return STATION_LIST[index]
 
 
 def save_last_station(filename: str, radio: Station):
     """
     Save station RADIO index to file
     @param filename: str, file name
-    @param radio: Radio
+    @param radio: Station
     """
-    index = RADIO_LIST.index(radio)
+    index = STATION_LIST.index(radio)
     with open(filename, 'w', encoding='utf-8') as file:
         file.write(str(index))
     LOG.debug("Saved RADIO index %s to file", index)
@@ -159,8 +155,8 @@ def exit_program():
 def btn_toggle_handler():
     """Handler for the 'toggle radio' button"""
     LOG.debug("Button toggle radio pressed")
-    Station.active = not Station.active
-    if Station.active:
+    Radio.active = not Radio.active
+    if Radio.active:
         Radio.start()
     else:
         Radio.stop()
@@ -200,7 +196,10 @@ def btn_rotary_counter_clockwise_handler():
 # Global vars
 PLAYER = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE, ytdl=False)
 PLAYER.set_loglevel('error')
+LCD_POWER = OutputDevice(LCD_POWER_PIN)
+LCD_POWER.on()  # turn on lcd
 LCD = Lcd()
+LCD.lcd_backlight(False)
 
 
 class Radio:
@@ -213,6 +212,7 @@ class Radio:
         """Stop the radio"""
         LOG.info("Stop player")
         LCD.clear()
+        LCD.lcd_backlight(False)
         PLAYER.stop()
         ButtonPanel.disable()
 
@@ -220,6 +220,7 @@ class Radio:
     def start():
         """Start the radio"""
         LOG.info("Start player")
+        LCD.lcd_backlight(True)
         ButtonPanel.enable()
         Radio.play()
 
@@ -252,28 +253,29 @@ class Radio:
     def switch_station() -> Station:
         """
         Switch station. Update Radio.station based on the value from ButtonPanel.rotary_direction
-        @return: Radio. New selected Radio from RADIO_LIST
+        @return: Station. New selected Station from STATION_LIST
         """
-        index = RADIO_LIST.index(Station.station)
-        if ButtonPanel.rotary_direction:
-            index = 0 if index == len(RADIO_LIST) - 1 else index + 1
+        index = STATION_LIST.index(Station.station)
+        if ButtonPanel.rotary_direction:  # True is clockwise
+            index = 0 if index == len(STATION_LIST) - 1 else index + 1
         else:
-            index = len(RADIO_LIST) - 1 if index == 0 else index - 1
+            index = len(STATION_LIST) - 1 if index == 0 else index - 1
 
-        Station.station = RADIO_LIST[index]
-        return RADIO_LIST[index]
+        Station.station = STATION_LIST[index]
+        return STATION_LIST[index]
 
     @staticmethod
     def play():
         """
-        Start playing current station from Radio. Display error message when PLAYER is still idle after n seconds
+        Start playing current station. Display error message when PLAYER is still idle after n seconds
         """
+        timeout = 60
         timestamp = time()
         PLAYER.play(Radio.station.url)
         LCD.clear()
         LCD.lcd_display_string("Tuning...", 1)
         while PLAYER.core_idle:
-            if time() - timestamp >= 60:
+            if time() - timestamp >= timeout:
                 LOG.error("Cannot start radio")
                 LCD.lcd_display_string("ERROR: cannot", 1)
                 LCD.lcd_display_string("start playing", 2)
@@ -284,17 +286,26 @@ class Radio:
             save_last_station(SAVED_STATION, Radio.station)
             LOG.info("Radio stream started: %s - %s", Radio.station.name, Radio.station.url)
 
+    @staticmethod
+    def update_metadata():
+        """Update the metadata on the lcd screen"""
+        if Radio.metadata != PLAYER.metadata['icy-title']:
+            LCD.scroll_text = ""
+            Radio.metadata = PLAYER.metadata['icy-title']
+            if Radio.metadata != "":
+                LCD.display_icy_title(Radio.metadata)
+
 
 class ButtonPanel:
     button_toggle_radio: Button = Button(PIN_BTN_TOGGLE, pull_up=True, bounce_time=BTN_BOUNCE)
     button_toggle_radio.when_pressed = btn_toggle_handler  # always enabled
     button_select: Button = Button(PIN_BTN_ROTARY, pull_up=True, bounce_time=BTN_BOUNCE)
     button_rotary: RotaryEncoder = RotaryEncoder(PIN_ROTARY_DT, PIN_ROTARY_CLK, bounce_time=BTN_BOUNCE,
-                                                 max_steps=len(RADIO_LIST) - 1)
+                                                 max_steps=len(STATION_LIST) - 1)
     button_rotary.steps = 0
     rotary_direction: bool = True  # True is clockwise, False is counterclockwise
     rotary_twist_flag: bool = False
-    btn_select_flag: bool = False
+    btn_select_flag = False
 
     @staticmethod
     def enable():
@@ -335,19 +346,13 @@ while True:
                 LCD.scroll()
 
             # Check metadata
-            if Radio.metadata != PLAYER.metadata['icy-title']:
-                LCD.scroll_text = ""
-                Radio.metadata = PLAYER.metadata['icy-title']
-                if Radio.metadata != "":
-                    LCD.display_icy_title(Radio.metadata)
+            if 'icy-title' in Radio.metadata:
+                Radio.update_metadata()
 
             # if, for any reason, MPV player stopped, restart it
             if PLAYER.core_idle:
                 Radio.play()
 
-        except (KeyError, TypeError):
-            # KeyError or TypeError could be triggered when 'icy-title' doesn't exist (or no station is playing)
-            pass
         except mpv.ShutdownError:
             LOG.error("ShutdownError from mpv")
             exit_program()

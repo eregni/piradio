@@ -180,7 +180,6 @@ class Lcd:
             scroll_lines.append(lines[i])
         self.scroll_text = " ".join(scroll_lines)
 
-    # Todo threading
     def scroll(self):
         """Scroll text one step"""
         if time() - self._scroll_lock > 0.5:

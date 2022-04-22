@@ -7,7 +7,7 @@ class Station:
     url: str
 
 
-RADIO_LIST = (
+STATION_LIST = (
     Station('Vrt NWS', 'http://progressive-audio.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'),
     Station('Radio 1', 'http://icecast.vrtcdn.be/radio1.aac'),
     Station('Radio 1 Classics', 'http://icecast.vrtcdn.be/radio1_classics.aac'),
