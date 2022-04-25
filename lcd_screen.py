@@ -6,16 +6,12 @@ import logging
 import textwrap
 from time import sleep, time
 from typing import List
-from threading import Lock
 from smbus import SMBus
-from RPi.GPIO import RPI_REVISION
+import threading
 
 LOG = logging.getLogger(__name__)
 
-# old and new versions of the RPi have swapped the two i2c buses
-# they can be identified by RPI_REVISION (or check sysfs)
-BUS_NUMBER = 0 if RPI_REVISION == 1 else 1
-
+BUS_NUMBER = 1 # SET TO I2C BUS NR
 ADDR = 0x27  # SET THE I2C ADDRESS HERE
 
 # other commands
@@ -100,12 +96,11 @@ class I2CDevice:
 
 class Lcd:
     def __init__(self):
-        self.lock: Lock = Lock()
-        self.scroll_text: str = ""
-        self.locked: bool = False
+        self.icy_title: str = ""
+        self.scroll_text = ""
         self._scroll_index: int = 0
         self._scroll_lock: float = time()
-
+        self._scroll_thread = threading.Thread(target=self._scroll, name="scroll_thread")
         self._lcd = I2CDevice(addr=ADDR)
         self._lcd_write(0x03)
         self._lcd_write(0x03)
@@ -122,56 +117,48 @@ class Lcd:
         Display radio name on lcd
         @type name: string, radio name to print on display
         """
-        wrap = textwrap.wrap(name, 16)
+        LOG.debug("New radio_name: %s", name)
+        lines = textwrap.wrap(name, 16)
         self.clear()
-        self.lcd_display_string(wrap[0], 1)
-        if len(wrap) > 1:
-            self.lcd_display_string(wrap[1], 2)
+        self._lcd_display_string(lines[0], 1)
+        if len(lines) > 1:
+            self._lcd_display_string(lines[1], 2)
 
     def display_icy_title(self, title: str):
         """
         Display icy-title on lcd. Activate scrolling when there are more than 2 lines to be displayed
         @param title: string title to display
         """
+        LOG.debug("New icy-title: %s", title)
         lines = textwrap.wrap(title, 16)
         self.clear()
-        self.lcd_display_string(lines[0], 1)
-        LOG.debug("New icy-title: %s", title)
+        self._lcd_display_string(lines[0], 1)
         if len(lines) == 2:
-            self.lcd_display_string(lines[1], 2)
+            self._lcd_display_string(lines[1], 2)
         elif len(lines) > 2:
-            self.set_up_scrolling(lines)
+            self._set_up_scrolling(lines)
 
-    def lcd_display_string(self, string: str, line: int):
+    def display_text(self, text: str, line: int):
         """
-        Print string on lcd screen
-        @param string: str
-        @param line: put string on specified line nr
+        Display text on specified line
+        @param text: str
+        @param line: int
+        @return:
         """
-        LOG.info("DISPLAY LOCK STATE: %s", self.lock.locked())
-        LOG.info("DISPLAY NEW STRING: %s", string)
-        if self.lock.locked():
-            return
-
-        self.lock.acquire()
-        if line == 1:
-            self._lcd_write(0x80)
-        if line == 2:
-            self._lcd_write(0xC0)
-        if line == 3:
-            self._lcd_write(0x94)
-        if line == 4:
-            self._lcd_write(0xD4)
-        for char in string:
-            self._lcd_write(ord(char), Rs)
-        self.lock.release()
+        LOG.debug("New text: %s", text)
+        lines = textwrap.wrap(text, 16)
+        self.clear()
+        self._lcd_display_string(lines[0], 1)
+        if len(lines) > 1:
+            self._lcd_display_string(lines[1], 2)
 
     def clear(self):
         """Clear lcd and set to home"""
+        self.scroll_text = ""
+        self._scroll_thread.join()  # todo TEST
         self._lcd_write(LCD_CLEARDISPLAY)
         self._lcd_write(LCD_RETURNHOME)
 
-    # backlight control (on/off)
     def lcd_backlight(self, active: bool):
         """Activate/Deactivate backlight"""
         if active:
@@ -179,9 +166,30 @@ class Lcd:
         else:
             self._lcd.write_cmd(LCD_NOBACKLIGHT)
 
-    def set_up_scrolling(self, lines: List[str]):
+    def _lcd_display_string(self, string: str, line: int):
         """
-        Activate scrolling and set up the SCROLL_TEXT
+        Print string on lcd screen
+        @param string: str
+        @param line: put string on specified line nr (1 or 2)
+        """
+        # if function is not called by scroll_thread terminate it
+        if threading.currentThread() != self._scroll_thread:
+            self.scroll_text = ""
+            self._scroll_thread.join()
+
+        if line == 1:
+            self._lcd_write(0x80)
+        elif line == 2:
+            self._lcd_write(0xC0)
+        else:
+            return
+
+        for char in string:
+            self._lcd_write(ord(char), Rs)
+
+    def _set_up_scrolling(self, lines: List[str]):
+        """
+        Activate scrolling in separate thread
         @param lines: List[str] -> textwrap.wrap()
         """
         scroll_lines = []
@@ -189,24 +197,23 @@ class Lcd:
         for i in range(1, len(lines)):
             scroll_lines.append(lines[i])
         self.scroll_text = " ".join(scroll_lines)
+        self._scroll_thread.start()
 
-    def scroll(self):
-        """Scroll text one step"""
-        if time() - self._scroll_lock < 0.5:
-            return
+    def _scroll(self):
+        """Scroll text on lcd. to be run in separate thread"""
+        while self.scroll_text:
+            if time() - self._scroll_lock < 0.5:
+                return
 
-        self._scroll_lock = time()
-        if self._scroll_index in [0, len(self.scroll_text) - 16]:
-            # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
-            self._scroll_lock += 2
+            self._scroll_lock = time()
+            if self._scroll_index in [0, len(self.scroll_text) - 16]:
+                # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
+                self._scroll_lock += 2
 
-        text = self.scroll_text[self._scroll_index: self._scroll_index + 16]
-        self.lcd_display_string(text, 2)
-        self._scroll_index = 0 if self._scroll_index >= len(self.scroll_text) - 16 else self._scroll_index + 1
+            text = self.scroll_text[self._scroll_index: self._scroll_index + 16]
+            self._lcd_display_string(text, 2)
+            self._scroll_index = 0 if self._scroll_index >= len(self.scroll_text) - 16 else self._scroll_index + 1
 
-    def disable_scrolling(self):
-        """Disable scrolling by setting scroll text to empty string"""
-        self.scroll_text = ""
 
     # clocks EN to latch command
     def _lcd_strobe(self, data: int):
