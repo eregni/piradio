@@ -268,7 +268,6 @@ class Radio:
         """Update the metadata on the lcd screen if necessary"""
         try:
             if LCD.icy_title != Radio._player.metadata['icy-title']:
-                LCD.scrolling = False
                 LCD.icy_title = Radio._player.metadata['icy-title']
                 if LCD.icy_title != "":
                     LCD.display_icy_title(LCD.icy_title)
