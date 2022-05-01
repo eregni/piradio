@@ -247,13 +247,12 @@ class Radio:
         Radio.state = States.START_STREAM
         timestamp = time()
         LCD.clear()
-        LCD.display_text("Tuning...", 1)
+        LCD.display_text("Tuning...")
         Radio._player.play(Radio.station.url)
         while Radio._player.core_idle:
             if time() - timestamp >= timeout:
                 LOG.error("Cannot start radio")
-                LCD.display_text("ERROR: cannot", 1)
-                LCD.display_text("start playing", 2)
+                LCD.display_text("ERROR: cannot start playing")
                 Radio.state = States.MAIN
                 break
 

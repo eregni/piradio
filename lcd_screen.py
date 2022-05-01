@@ -62,7 +62,7 @@ Rs = 0b00000001  # Register select bit
 
 
 class I2CDevice:
-    def __init__(self, addr: int, bus: int = BUS_NUMBER):
+    def __init__(self, addr: int, bus: int):
         self.addr = addr
         self.bus = SMBus(bus)
 
@@ -95,13 +95,13 @@ class I2CDevice:
 
 
 class Lcd:
-    def __init__(self):
+    def __init__(self, addr: int = ADDR, bus: int = BUS_NUMBER):
         self.icy_title: str = ""
         self.scroll_text = ""
         self._scroll_index: int = 0
         self._scroll_lock: float = time()
         self._scroll_thread = threading.Thread(target=self._scroll, name="scroll_thread")
-        self._lcd = I2CDevice(addr=ADDR)
+        self._lcd = I2CDevice(addr, bus)
         self._lcd_write(0x03)
         self._lcd_write(0x03)
         self._lcd_write(0x03)
@@ -138,12 +138,10 @@ class Lcd:
         elif len(lines) > 2:
             self._set_up_scrolling(lines)
 
-    def display_text(self, text: str, line: int):
+    def display_text(self, text: str):
         """
         Display text on specified line
         @param text: str
-        @param line: int
-        @return:
         """
         LOG.debug("New text: %s", text)
         lines = textwrap.wrap(text, 16)
@@ -154,8 +152,8 @@ class Lcd:
 
     def clear(self):
         """Clear lcd and set to home"""
-        self.scroll_text = ""
-        self._scroll_thread.join()  # todo TEST
+        self._stop_scrolling()
+
         self._lcd_write(LCD_CLEARDISPLAY)
         self._lcd_write(LCD_RETURNHOME)
 
@@ -172,10 +170,7 @@ class Lcd:
         @param string: str
         @param line: put string on specified line nr (1 or 2)
         """
-        # if function is not called by scroll_thread terminate it
-        if threading.currentThread() != self._scroll_thread:
-            self.scroll_text = ""
-            self._scroll_thread.join()
+        self._stop_scrolling()
 
         if line == 1:
             self._lcd_write(0x80)
@@ -230,3 +225,9 @@ class Lcd:
     def _lcd_write(self, cmd: int, mode: int = 0):
         self._lcd_write_four_bits(mode | (cmd & 0xF0))
         self._lcd_write_four_bits(mode | ((cmd << 4) & 0xF0))
+
+    def _stop_scrolling(self):
+        """Disable scroll thread"""
+        self.scroll_text = ""
+        if threading.currentThread() == self._scroll_thread:
+            self._scroll_thread.join()
