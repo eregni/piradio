@@ -1,20 +1,24 @@
 """
-Control module for the lcd screen
+Control module for lcd screen RC1602B5-LLH-JWV
+Datasheet: https://www.tme.eu/Document/d73e6686c34bcab5ca8e82176393a587/RC1602B5-LLH-JWV.pdf
+The module can just display text. It fetches the string on 16x2 lines and the 2nd line starts scrolling when the string
+is longer than 32 chars.
 ORIGINAL SOURCE: https://github.com/the-raspberry-pi-guy/lcd.git
 """
 import logging
 import textwrap
-from time import sleep, time
+from time import sleep
+from threading import Thread
 from typing import List
 from smbus import SMBus
-import threading
 
 LOG = logging.getLogger(__name__)
 
-BUS_NUMBER = 1 # SET TO I2C BUS NR
-ADDR = 0x27  # SET THE I2C ADDRESS HERE
+BUS = 1 # SET TO I2C BUS NR
+ADDR = 0x3c  # SET THE I2C ADDRESS HERE
+SCROLL_DELAY = 0.75 # SET SPEED OF SCROLLING TEXT (1=1sec/hop)
 
-# other commands
+# Instructions -> datasheet p29
 LCD_CLEARDISPLAY = 0x01
 LCD_RETURNHOME = 0x02
 LCD_ENTRYMODESET = 0x04
@@ -49,185 +53,120 @@ LCD_8BITMODE = 0x10
 LCD_4BITMODE = 0x00
 LCD_2LINE = 0x08
 LCD_1LINE = 0x00
-LCD_5x10DOTS = 0x04
+LCD_5x11DOTS = 0x04
 LCD_5x8DOTS = 0x00
 
-# flags for backlight control
-LCD_BACKLIGHT = 0x08
-LCD_NOBACKLIGHT = 0x00
-
-En = 0b00000100  # Enable bit
-Rw = 0b00000010  # Read/Write bit
-Rs = 0b00000001  # Register select bit
-
-
-class I2CDevice:
-    def __init__(self, addr: int, bus: int):
-        self.addr = addr
-        self.bus = SMBus(bus)
-
-    # write a single command
-    def write_cmd(self, cmd: int):
-        self.bus.write_byte(self.addr, cmd)
-        sleep(0.0001)
-
-    # write a command and argument
-    def write_cmd_arg(self, cmd: int, data: int):
-        self.bus.write_byte_data(self.addr, cmd, data)
-        sleep(0.0001)
-
-    # write a block of data
-    def write_block_data(self, cmd: int, data: int):
-        self.bus.write_block_data(self.addr, cmd, data)
-        sleep(0.0001)
-
-    # read a single byte
-    def read(self) -> int:
-        return self.bus.read_byte(self.addr)
-
-    # read
-    def read_data(self, cmd: int) -> int:
-        return self.bus.read_byte_data(self.addr, cmd)
-
-    # read a block of data
-    def read_block_data(self, cmd: int) -> int:
-        return self.bus.read_block_data(self.addr, cmd)
-
+# Control bytes -> datasheet p38
+CTRLBYTE_DATA = 0x40  # write to DDRAM/CGRAM
+CTRLBYTE_COMMAND = 0x00  # write to IR
 
 class Lcd:
-    def __init__(self, addr: int = ADDR, bus: int = BUS_NUMBER):
-        self.icy_title: str = ""
-        self.scroll_text = ""
-        self._scroll_index: int = 0
-        self._scroll_lock: float = time()
-        self._scroll_thread = threading.Thread(target=self._scroll, name="scroll_thread")
-        self._lcd = I2CDevice(addr, bus)
-        self._lcd_write(0x03)
-        self._lcd_write(0x03)
-        self._lcd_write(0x03)
-        self._lcd_write(0x02)
-        self._lcd_write(LCD_FUNCTIONSET | LCD_2LINE | LCD_5x8DOTS | LCD_4BITMODE)
-        self._lcd_write(LCD_DISPLAYCONTROL | LCD_DISPLAYON)
-        self._lcd_write(LCD_CLEARDISPLAY)
-        self._lcd_write(LCD_ENTRYMODESET | LCD_ENTRYLEFT)
-        sleep(0.2)
+    """
+    Class to write strings to lcd display. Writing a string always clears the lcd and start at the first character in
+    the upper left. When the string doesn't fit on the display, the 2nd line will start scrolling.
+    """
+    def __init__(self, addr: int = ADDR, bus: int = BUS):
+        self._scroll_text = ""
+        self._addr = addr
+        self._bus = SMBus(bus)
+        self._set_up_scroll_thread()
 
-    def display_radio_name(self, name: str):
-        """
-        Display radio name on lcd
-        @type name: string, radio name to print on display
-        """
-        LOG.debug("New radio_name: %s", name)
-        lines = textwrap.wrap(name, 16)
-        self.clear()
-        self._lcd_display_string(lines[0], 1)
-        if len(lines) > 1:
-            self._lcd_display_string(lines[1], 2)
-
-    def display_icy_title(self, title: str):
-        """
-        Display icy-title on lcd. Activate scrolling when there are more than 2 lines to be displayed
-        @param title: string title to display
-        """
-        LOG.debug("New icy-title: %s", title)
-        lines = textwrap.wrap(title, 16)
-        self.clear()
-        self._lcd_display_string(lines[0], 1)
-        if len(lines) == 2:
-            self._lcd_display_string(lines[1], 2)
-        elif len(lines) > 2:
-            self._set_up_scrolling(lines)
+        # initialize -> datasheet p42
+        sleep(0.02)
+        self._write_command(LCD_FUNCTIONSET | LCD_8BITMODE | LCD_2LINE | LCD_5x8DOTS)
+        self._write_command(LCD_DISPLAYCONTROL | LCD_DISPLAYON | LCD_CURSOROFF | LCD_BLINKOFF)
+        self._write_command(LCD_CLEARDISPLAY)
+        sleep(0.01)
+        self._write_command(LCD_ENTRYMODESET | LCD_ENTRYLEFT)
 
     def display_text(self, text: str):
         """
-        Display text on specified line
+        Display text. Activate scrolling in separate thread when the text on the second line > 16 characters.
         @param text: str
         """
-        LOG.debug("New text: %s", text)
         lines = textwrap.wrap(text, 16)
         self.clear()
-        self._lcd_display_string(lines[0], 1)
-        if len(lines) > 1:
-            self._lcd_display_string(lines[1], 2)
+        self._display_string(lines[0], 1)
+        if len(lines) == 2:
+            self._display_string(lines[1], 2)
+        elif len(lines) > 2:
+            scroll_lines = []
+            # concat lines except the first one (is printed on line 1)
+            for i in range(1, len(lines)):
+                scroll_lines.append(lines[i])
+            self._scroll_text = " ".join(scroll_lines)
+            self._set_up_scroll_thread()
+            self._scroll_thread.start()
 
     def clear(self):
         """Clear lcd and set to home"""
         self._stop_scrolling()
+        self._write_command(LCD_CLEARDISPLAY)
+        sleep(0.001)
+        self._write_command(LCD_RETURNHOME)
+        sleep(0.001)
 
-        self._lcd_write(LCD_CLEARDISPLAY)
-        self._lcd_write(LCD_RETURNHOME)
-
-    def lcd_backlight(self, active: bool):
-        """Activate/Deactivate backlight"""
-        if active:
-            self._lcd.write_cmd(LCD_BACKLIGHT)
-        else:
-            self._lcd.write_cmd(LCD_NOBACKLIGHT)
-
-    def _lcd_display_string(self, string: str, line: int):
+    def _display_string(self, string: str, line: int):
         """
         Print string on lcd screen
         @param string: str
         @param line: put string on specified line nr (1 or 2)
         """
-        self._stop_scrolling()
-
         if line == 1:
-            self._lcd_write(0x80)
+            self._write_command(LCD_SETDDRAMADDR)
         elif line == 2:
-            self._lcd_write(0xC0)
+            self._write_command(LCD_SETDDRAMADDR + 0x40)
         else:
             return
 
-        for char in string:
-            self._lcd_write(ord(char), Rs)
-
-    def _set_up_scrolling(self, lines: List[str]):
-        """
-        Activate scrolling in separate thread
-        @param lines: List[str] -> textwrap.wrap()
-        """
-        scroll_lines = []
-        # concat lines except the first item (is printed on line 1)
-        for i in range(1, len(lines)):
-            scroll_lines.append(lines[i])
-        self.scroll_text = " ".join(scroll_lines)
-        self._scroll_thread.start()
+        self._write_block_data([ord(item) for item in string])
 
     def _scroll(self):
-        """Scroll text on lcd. to be run in separate thread"""
-        while self.scroll_text:
-            if time() - self._scroll_lock < 0.5:
-                return
+        """Scroll text on lcd. To be run in separate thread"""
+        scroll_index = 0
+        while self._scroll_text:
+            text = self._scroll_text[scroll_index: scroll_index + 16]
+            self._display_string(text, 2)
 
-            self._scroll_lock = time()
-            if self._scroll_index in [0, len(self.scroll_text) - 16]:
+            if scroll_index in [0, len(self._scroll_text) - 16]:
                 # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
-                self._scroll_lock += 2
+                sleep(SCROLL_DELAY + 2)
+            else:
+                sleep(SCROLL_DELAY)
 
-            text = self.scroll_text[self._scroll_index: self._scroll_index + 16]
-            self._lcd_display_string(text, 2)
-            self._scroll_index = 0 if self._scroll_index >= len(self.scroll_text) - 16 else self._scroll_index + 1
-
-
-    # clocks EN to latch command
-    def _lcd_strobe(self, data: int):
-        self._lcd.write_cmd(data | En | LCD_BACKLIGHT)
-        sleep(.0005)
-        self._lcd.write_cmd(((data & ~En) | LCD_BACKLIGHT))
-        sleep(.0001)
-
-    def _lcd_write_four_bits(self, data: int):
-        self._lcd.write_cmd(data | LCD_BACKLIGHT)
-        self._lcd_strobe(data)
-
-    # write a command to lcd
-    def _lcd_write(self, cmd: int, mode: int = 0):
-        self._lcd_write_four_bits(mode | (cmd & 0xF0))
-        self._lcd_write_four_bits(mode | ((cmd << 4) & 0xF0))
+            if scroll_index >= len(self._scroll_text) - 16:
+                scroll_index = 0
+            else:
+                scroll_index += 1
 
     def _stop_scrolling(self):
-        """Disable scroll thread"""
-        self.scroll_text = ""
-        if threading.currentThread() == self._scroll_thread:
+        self._scroll_text = ""
+        if isinstance(self._scroll_thread, Thread) and self._scroll_thread.is_alive():
             self._scroll_thread.join()
+
+    def _set_up_scroll_thread(self):
+        self._scroll_thread = Thread(target=self._scroll, name="scroll_thread")
+
+    def _write_command(self, cmd: int):
+        """
+        Write value to Instruction register (IR)
+        @type cmd: command from instruction table -> datasheet p29s
+        """
+        self._bus.write_byte_data(self._addr, CTRLBYTE_COMMAND, cmd)
+        sleep(0.0001)
+
+    def _write_data(self, data: int):
+        """
+        Write value to DDRAM/CGRAM
+        @type data: int
+        """
+        self._bus.write_byte_data(self._addr, CTRLBYTE_DATA, data)
+        sleep(0.0001)
+
+    def _write_block_data(self, data: List[int]):
+        """
+        Write list of values to DDRAM/CGRAM
+        @type data: List[int]
+        """
+        self._bus.write_i2c_block_data(self._addr, CTRLBYTE_DATA, data)
+        sleep(0.0001)

@@ -6,7 +6,6 @@ class Station:
     name: str  # displayed on lcd screen
     url: str
 
-
 STATION_LIST = (
     Station('Vrt NWS', 'http://progressive-audio.vrtcdn.be/content/fixed/11_11niws-snip_hi.mp3'),
     Station('Radio 1', 'http://icecast.vrtcdn.be/radio1.aac'),
