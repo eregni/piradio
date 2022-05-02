@@ -1,37 +1,22 @@
 """
 Control module for lcd screen RC1602B5-LLH-JWV
 Datasheet: https://www.tme.eu/Document/d73e6686c34bcab5ca8e82176393a587/RC1602B5-LLH-JWV.pdf
+The module can just display text. It fetches the string on 16x2 lines and the 2nd line starts scrolling when the string
+is longer than 32 chars.
+ORIGINAL SOURCE: https://github.com/the-raspberry-pi-guy/lcd.git
 """
 import logging
 import textwrap
-from time import sleep, time
+from time import sleep
 from threading import Thread
 from typing import List
 from smbus import SMBus
-
 
 LOG = logging.getLogger(__name__)
 
 BUS = 1 # SET TO I2C BUS NR
 ADDR = 0x3c  # SET THE I2C ADDRESS HERE
-
-# Add custom chars here. Max 8 custom chars.
-# Every custom char consists of 8 numbers with 5 bits.
-# To display a custom char, refer to them with nrs 0x00 + ([0-7] 0x08)  (every custom char needs 8 bytes from CGRAM)
-# example:
-# 0b11111        x x x x x
-# 0b10001        x - - - x
-# 0b10001        x - - - x
-# 0b11111    =>  x x x x x
-# 0b10001        x - - - x
-# 0b10001        x - - - x
-# 0b10001        x - - - x
-# 0b10001        x - - - x
-# todo: how to show them with display_text()???
-CUSTOM_CHARS: List[List[int]] = [
-    # mountain
-    [0x04, 0x04, 0x04, 0x0e, 0x0e, 0x0e, 0x1f, 0x1f]
-]
+SCROLL_DELAY = 0.75 # SET SPEED OF SCROLLING TEXT (1=1sec/hop)
 
 # other commands
 LCD_CLEARDISPLAY = 0x01
@@ -77,7 +62,6 @@ CTRLBYTE_COMMAND = 0x00  # write to IR
 
 
 class Lcd:
-    # todo: shift display instead of writing strings???
     """
     Class to write strings to lcd display. Writing a string always clears the lcd and start at the first character in
     the upper left. When the string doesn't fit on the display, the 2nd line will start scrolling.
@@ -95,15 +79,6 @@ class Lcd:
         self._write_command(LCD_CLEARDISPLAY)
         sleep(0.01)
         self._write_command(LCD_ENTRYMODESET | LCD_ENTRYLEFT)
-
-        # add custom chars
-        self._write_command(LCD_SETCGRAMADDR)
-        if len(CUSTOM_CHARS) > 5: raise ValueError("There are max 5 custom chars")
-        for custom_char in CUSTOM_CHARS:
-            if len(custom_char) != 8: raise ValueError("A custom char should have 8 numbers")
-            for value in custom_char:
-                if value not in range(0x1f + 1): raise ValueError("Custom chars values must be between 0x00 and 0x1f")
-            self._write_block_data(custom_char)
 
     def display_text(self, text: str):
         """
@@ -149,22 +124,21 @@ class Lcd:
 
     def _scroll(self):
         """Scroll text on lcd. To be run in separate thread"""
-        scroll_lock = time()
         scroll_index = 0
-
         while self._scroll_text:
-            if time() - scroll_lock < 0.75:
-                sleep(0.001)
-                continue
-
-            scroll_lock = time()
-            if scroll_index in [0, len(self._scroll_text) - 16]:
-                # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
-                scroll_lock += 2
-
             text = self._scroll_text[scroll_index: scroll_index + 16]
             self._display_string(text, 2)
-            scroll_index = 0 if scroll_index >= len(self._scroll_text) - 16 else scroll_index + 1
+
+            if scroll_index in [0, len(self._scroll_text) - 16]:
+                # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
+                sleep(SCROLL_DELAY + 2)
+            else:
+                sleep(SCROLL_DELAY)
+
+            if scroll_index >= len(self._scroll_text) - 16:
+                scroll_index = 0
+            else:
+                scroll_index += 1
 
     def _stop_scrolling(self):
         self._scroll_text = ""
@@ -191,10 +165,3 @@ class Lcd:
         """Write """
         self._bus.write_i2c_block_data(self._addr, CTRLBYTE_DATA, data)
         sleep(0.0001)
-
-# testing
-if __name__ == "__main__":
-    LCD = Lcd()
-    LCD.display_text("Bats bats bats baaaaaaaaaaaats with python")
-    while True:
-        sleep(1)
