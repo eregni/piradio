@@ -74,6 +74,8 @@ from enum import Enum
 from datetime import datetime
 from functools import partial
 from threading import Event
+from typing import Optional
+
 from gpiozero import Button, OutputDevice, RotaryEncoder
 import setproctitle
 import mpv
@@ -88,8 +90,8 @@ PIN_BTN_ROTARY = 25
 PIN_ROTARY_DT = 5  # Momentary encoder DT
 PIN_ROTARY_CLK = 6  # Momentary encoder CLK
 LCD_POWER_PIN = 16
-LOG_LEVEL = logging.INFO
 BTN_BOUNCE = 0.05  # Button debounce time in seconds
+LOG_LEVEL = logging.INFO
 # End config ################################################################################
 
 # Logging config ############################################################################
@@ -164,22 +166,18 @@ class States(Enum):
 class Radio:
     def __init__(self):
         self._station: Station = get_saved_station(SAVED_STATION)
+        self._state: States = States.OFF
         self._player:  mpv.MPV = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE, ytdl=False)
         self._player.set_loglevel('error')
         self._icy_title: str = ""
-        self._state: States = States.OFF
-
-    @property
-    def state(self):
-        return self._state
-
-    @state.setter
-    def state(self, value: States):
-        self._state = value
 
     @property
     def station(self):
         return self._station
+
+    @property
+    def state(self):
+        return self._state
 
     def stop(self):
         """Stop the radio"""
@@ -192,44 +190,38 @@ class Radio:
     def start(self):
         """Start the radio"""
         LOG.info("Start player")
-        LCD.clear()
         BUTTON_PANEL.enable()
         self.play()
 
-    def select_station(self, direction: Direction):
+    def select_station(self):
         """
         This function should be called by the rotary encoder.
         Display the next (or previous) station name on lcd.
         If you push the rotary encoder OR wait for 3 seconds, the current displayed station will start playing.
-        @return: bool, True if the value of Radio.station has changed.
-        Should only return False when the user selects the station which is already playing.
         """
         self._state = States.SELECT_STATION
-        BUTTON_PANEL.button_select_event.clear()
         timestamp = time()
-        self.switch_station(direction)
-        LCD.display_text(self.station.name)
-        new_station_selected = True
-        counter = BUTTON_PANEL.button_rotary.steps
+        new_station = self._station
         while time() - timestamp <= 3:
-            if BUTTON_PANEL.button_rotary.steps != counter:
-                direction = Direction.CLOCKWISE if BUTTON_PANEL.button_rotary.steps > counter else Direction.COUNTERCLOCKWISE
+            if BUTTON_PANEL.rotary_twist_event.isSet():
+                # the first call from the rotary handler ends up here
+                BUTTON_PANEL.rotary_twist_event.clear()
                 timestamp = time()
-                new_station = self.switch_station(direction)
+                new_station = self.switch_station(BUTTON_PANEL.rotary_direction)
                 LCD.display_text(self._station.name)
-                new_station_selected = bool(new_station != self._station)
 
             elif BUTTON_PANEL.button_select_event.isSet():
                 BUTTON_PANEL.button_select_event.clear()
+                self._station = new_station
                 self.play()
                 return
 
-        if new_station_selected:
+        if new_station != self._station:
             self.play()
 
     def switch_station(self, direction: Direction) -> Station:
         """
-        Switch station. Update Radio.station based on the value from ButtonPanel.rotary_direction
+        Switch station. Get station based on the value from ButtonPanel.rotary_direction
         @return: Station. New selected Station from STATION_LIST
         """
         index = STATION_LIST.index(self._station)
@@ -238,7 +230,6 @@ class Radio:
         else:
             index = len(STATION_LIST) - 1 if index == 0 else index - 1
 
-        self._station = STATION_LIST[index]
         return STATION_LIST[index]
 
     def play(self):
@@ -246,16 +237,15 @@ class Radio:
         Start playing current station. Display error message when PLAYER is still idle after n seconds
         """
         timeout = 60
-        Radio.state = States.START_STREAM
+        self._state = States.START_STREAM
         timestamp = time()
-        LCD.clear()
         LCD.display_text("Tuning...")
         self._player.play(self._station.url)
         while self._player.core_idle:
             if time() - timestamp >= timeout:
                 LOG.error("Cannot start radio")
                 LCD.display_text("ERROR: cannot start playing")
-                Radio.state = States.MAIN
+                self._state = States.MAIN
                 return
 
         LCD.display_text(self._station.name)
@@ -285,42 +275,54 @@ def btn_toggle_handler():
         RADIO.stop()
 
 def btn_select_handler():
-    """Handler for push button from rotary encoder -> play next radio station"""
-    LOG.debug("Btn_select pressed %s", datetime.now().strftime("%H:%M:%S"))
-    if RADIO.state == States.SELECT_STATION:
-        BUTTON_PANEL.button_select_event.set()
-    elif RADIO.state == States.PLAYING:
+    """
+    Handler for push button from rotary encoder:
+        1: When pressed -> show radio name on lcd display
+        2: After rotation with rotary encoder -> play selected radio station
+    """
+    LOG.debug("Btn_select pressed")
+    if RADIO.state == States.PLAYING:
         LCD.display_text(RADIO.station.name)
+    elif RADIO.state == States.SELECT_STATION:
+        BUTTON_PANEL.button_select_event.set()
+
 
 def btn_rotary_handler(direction: Direction):
-    """Handler -> play next radio station"""
-    LOG.debug("Rotary encoder turned %s. counter = %s", direction.name, BUTTON_PANEL.button_rotary.steps)
+    """Handler -> start select_station"""
+    LOG.debug("Rotary encoder turned %s. counter = %s", direction.name, BUTTON_PANEL.rotary_steps)
+    BUTTON_PANEL.rotary_direction = direction
+    BUTTON_PANEL.rotary_twist_event.set()
     if RADIO.state in [States.MAIN, States.PLAYING]:
-        RADIO.state = States.SELECT_STATION
-        RADIO.select_station(direction)
+        RADIO.select_station()
 # End Button handlers
 
 class ButtonPanel:
     def __init__(self):
-        self.button_toggle_radio: Button = Button(PIN_BTN_TOGGLE, pull_up=True, bounce_time=BTN_BOUNCE)
-        self.button_toggle_radio.when_pressed = btn_toggle_handler  # always enabled
-        self.button_select: Button = Button(PIN_BTN_ROTARY, pull_up=True, bounce_time=BTN_BOUNCE)
-        self.button_rotary: RotaryEncoder = RotaryEncoder(PIN_ROTARY_DT, PIN_ROTARY_CLK, bounce_time=BTN_BOUNCE,
-                                                          max_steps=len(STATION_LIST) - 1)
-        self.button_rotary.steps = 0
         self.button_select_event = Event()
+        self.rotary_twist_event = Event()
+        self.rotary_direction: Optional[Direction] = None
+        self._button_toggle_radio: Button = Button(PIN_BTN_TOGGLE, pull_up=True, bounce_time=BTN_BOUNCE)
+        self._button_toggle_radio.when_pressed = btn_toggle_handler  # always enabled
+        self._button_select: Button = Button(PIN_BTN_ROTARY, pull_up=True, bounce_time=BTN_BOUNCE)
+        self._button_rotary: RotaryEncoder = RotaryEncoder(PIN_ROTARY_DT, PIN_ROTARY_CLK, bounce_time=BTN_BOUNCE,
+                                                           max_steps=len(STATION_LIST) - 1)
+        self._button_rotary.steps = 0
+
+    @property
+    def rotary_steps(self):
+        return self._button_rotary.steps
 
     def enable(self):
         """Connect button handlers"""
-        self.button_rotary.when_rotated_clockwise = partial(btn_rotary_handler, Direction.CLOCKWISE)
-        self.button_rotary.when_rotated_counter_clockwise = partial(btn_rotary_handler, Direction.COUNTERCLOCKWISE)
-        self.button_select.when_pressed = btn_select_handler
+        self._button_rotary.when_rotated_clockwise = partial(btn_rotary_handler, Direction.CLOCKWISE)
+        self._button_rotary.when_rotated_counter_clockwise = partial(btn_rotary_handler, Direction.COUNTERCLOCKWISE)
+        self._button_select.when_pressed = btn_select_handler
 
     def disable(self):
         """Disconnect button handlers"""
-        self.button_rotary.when_rotated_clockwise = None
-        self.button_rotary.when_rotated_counter_clockwise = None
-        self.button_select.when_pressed = None
+        self._button_rotary.when_rotated_clockwise = None
+        self._button_rotary.when_rotated_counter_clockwise = None
+        self._button_select.when_pressed = None
 
 # Global vars (Radio, Lcd, ButtonPanel)
 lcd_power = OutputDevice(LCD_POWER_PIN)
@@ -337,7 +339,7 @@ if __name__ == "__main__":
             if RADIO.state == States.PLAYING:
                 RADIO.check_metadata()
 
-            sleep(0.001)
+            sleep(3)  # check for icy metadata every 3 seconds
 
     except mpv.ShutdownError:
         LOG.error("ShutdownError from mpv")

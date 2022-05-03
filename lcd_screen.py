@@ -170,3 +170,9 @@ class Lcd:
         """
         self._bus.write_i2c_block_data(self._addr, CTRLBYTE_DATA, data)
         sleep(0.0001)
+
+# test
+if __name__ == '__main__':
+    lcd = Lcd()
+    lcd.clear()
+    lcd.display_text("We are the peoples front of Judea, not the Judea peoples front or the Judea popular people front!")
