@@ -1,3 +1,4 @@
+import logging
 from time import time
 
 import mpv
@@ -6,7 +7,7 @@ from button_panel import ButtonPanel
 from lcd_screen import Lcd
 from models.enums import States, Direction
 from models.stations import Station, STATION_LIST
-from config import *
+from config import Config
 
 LOG = logging.getLogger(__name__)
 
@@ -49,8 +50,8 @@ class Radio:
     """Global vars"""
     _lcd = Lcd()
     _state: States = States.OFF
-    station: Station = _get_saved_station(SAVED_STATION)
-    _player = mpv.MPV(log_handler=_mpv_log, audio_device=AUDIO_DEVICE, ytdl=False)
+    station: Station = _get_saved_station(Config.SAVED_STATION)
+    _player = mpv.MPV(log_handler=_mpv_log, audio_device=Config.AUDIO_DEVICE, ytdl=False)
     _player.set_loglevel('error')
     _current_icy_title = ""
 
@@ -99,7 +100,7 @@ class Radio:
                 cls._lcd.display_text(new_station.name)
                 new_station_selected = bool(new_station != Radio.station)
 
-            elif ButtonPanel.button_select_event.isSet():
+            elif ButtonPanel.button_select_event.is_set():
                 ButtonPanel.button_select_event.clear()
                 Radio.play()
                 return
@@ -142,7 +143,7 @@ class Radio:
 
         if not Radio._player.core_idle:
             cls._lcd.display_text(Radio.station.name)
-            _save_last_station(SAVED_STATION, Radio.station)
+            _save_last_station(Config.SAVED_STATION, Radio.station)
             LOG.info("Radio stream started: %s - %s", Radio.station.name, Radio.station.url)
             cls._state = States.PLAYING
 

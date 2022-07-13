@@ -66,6 +66,7 @@ atexit module catches SIGINT.
     -> KillSignal=SIGINT
 """
 import atexit
+import logging
 import sys
 from logging.handlers import RotatingFileHandler
 from time import sleep
@@ -73,7 +74,7 @@ from time import sleep
 import mpv
 import setproctitle
 
-from config import *
+from config import Config
 from models.enums import States
 from radio import Radio
 
@@ -85,15 +86,15 @@ LOG_FORMATTER = logging.Formatter(
 LOG_FORMATTER.default_msec_format = '%s.%03d'
 LOG_HANDLER_FILE = RotatingFileHandler(filename='piradio.log', maxBytes=2000, backupCount=1)
 LOG_HANDLER_FILE.setFormatter(LOG_FORMATTER)
-LOG_HANDLER_FILE.setLevel(LOG_LEVEL)
+LOG_HANDLER_FILE.setLevel(Config.LOG_LEVEL)
 LOG_HANDLER_CONSOLE = logging.StreamHandler()
 LOG_HANDLER_CONSOLE.setFormatter(LOG_FORMATTER)
-LOG_HANDLER_CONSOLE.setLevel(LOG_LEVEL)
+LOG_HANDLER_CONSOLE.setLevel(Config.LOG_LEVEL)
 LOG = logging.getLogger()
 LOG.addHandler(LOG_HANDLER_FILE)
-if LOG_LEVEL == logging.DEBUG:
+if Config.LOG_LEVEL == logging.DEBUG:
     LOG.addHandler(LOG_HANDLER_CONSOLE)
-LOG.setLevel(LOG_LEVEL)
+LOG.setLevel(Config.LOG_LEVEL)
 # End logging config #######################################################################
 
 
@@ -110,7 +111,7 @@ setproctitle.setproctitle("piradio")
 LOG.info("Start program")
 try:
     while True:
-        if Radio.state == States.PLAYING:
+        if Radio.state is States.PLAYING:
             Radio.check_metadata()
 
         sleep(0.01)
