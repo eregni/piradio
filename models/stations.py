@@ -1,6 +1,7 @@
 """Collection with selectable radio stations"""
 from dataclasses import dataclass
 
+
 @dataclass
 class Station:
     name: str  # displayed on lcd screen
