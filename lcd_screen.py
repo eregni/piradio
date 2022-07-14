@@ -11,7 +11,11 @@ import textwrap
 from time import sleep
 from threading import Thread
 from typing import List
+
+from gpiozero import OutputDevice
 from smbus import SMBus
+
+from config import Config
 
 LOG = logging.getLogger(__name__)
 
@@ -60,6 +64,10 @@ LCD_5x8DOTS = 0x00
 # Control bytes
 CTRLBYTE_DATA = 0x40  # write to DDRAM/CGRAM
 CTRLBYTE_COMMAND = 0x00  # write to IR
+
+# todo: give lcd separate power and turn only led on/off when Radio.start/Radio.stop is called
+lcd_power = OutputDevice(Config.LCD_POWER_PIN)
+lcd_power.on()  # turn on lcd
 
 
 class Lcd:
@@ -163,3 +171,6 @@ class Lcd:
         """Write """
         self._bus.write_i2c_block_data(self._addr, CTRLBYTE_DATA, data)
         sleep(0.0001)
+
+
+lcd = Lcd()

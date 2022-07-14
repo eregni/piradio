@@ -111,8 +111,13 @@ setproctitle.setproctitle("piradio")
 LOG.info("Start program")
 try:
     while True:
-        if Radio.state is States.PLAYING:
+        # check if radio sends new icy metadata
+        if Radio.state() is States.PLAYING:
             Radio.check_metadata()
+
+        # check if a new station has been selected
+        if Radio.state() is States.SELECT_STATION:
+            Radio.check_select_station()
 
         sleep(0.01)
 
