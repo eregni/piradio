@@ -1,24 +1,29 @@
 """
 Control module for lcd screen RC1602B5-LLH-JWV
 Datasheet: https://www.tme.eu/Document/d73e6686c34bcab5ca8e82176393a587/RC1602B5-LLH-JWV.pdf
-The module can just display text. It fetches the string on 16x2 lines and the 2nd line starts scrolling when the string
-is longer than 32 chars.
+The module can just display text. It fetches the string on 16x2 lines and the 2nd line starts scrolling
+when the string is longer than 32 chars.
 ORIGINAL SOURCE: https://github.com/the-raspberry-pi-guy/lcd.git
+Modified for working with VA LCD
 """
 import logging
 import textwrap
 from time import sleep
 from threading import Thread
 from typing import List
+
+from gpiozero import OutputDevice
 from smbus import SMBus
+
+from config import Config
 
 LOG = logging.getLogger(__name__)
 
-BUS = 1 # SET TO I2C BUS NR
+BUS = 1  # SET TO I2C BUS NR
 ADDR = 0x3c  # SET THE I2C ADDRESS HERE
-SCROLL_DELAY = 0.75 # SET SPEED OF SCROLLING TEXT (1=1sec/hop)
+SCROLL_DELAY = 0.75  # SET SPEED OF SCROLLING TEXT (1=1sec/hop)
 
-# Instructions -> datasheet p29
+# other commands
 LCD_CLEARDISPLAY = 0x01
 LCD_RETURNHOME = 0x02
 LCD_ENTRYMODESET = 0x04
@@ -56,9 +61,14 @@ LCD_1LINE = 0x00
 LCD_5x11DOTS = 0x04
 LCD_5x8DOTS = 0x00
 
-# Control bytes -> datasheet p38
+# Control bytes
 CTRLBYTE_DATA = 0x40  # write to DDRAM/CGRAM
 CTRLBYTE_COMMAND = 0x00  # write to IR
+
+# todo: give lcd separate power and turn only led on/off when Radio.start/Radio.stop is called
+lcd_power = OutputDevice(Config.LCD_POWER_PIN)
+lcd_power.on()  # turn on lcd
+
 
 class Lcd:
     """
@@ -71,7 +81,7 @@ class Lcd:
         self._bus = SMBus(bus)
         self._set_up_scroll_thread()
 
-        # initialize -> datasheet p42
+        # initialize
         sleep(0.02)
         self._write_command(LCD_FUNCTIONSET | LCD_8BITMODE | LCD_2LINE | LCD_5x8DOTS)
         self._write_command(LCD_DISPLAYCONTROL | LCD_DISPLAYON | LCD_CURSOROFF | LCD_BLINKOFF)
@@ -84,17 +94,14 @@ class Lcd:
         Display text. Activate scrolling in separate thread when the text on the second line > 16 characters.
         @param text: str
         """
-        lines = textwrap.wrap(text, 16)
+        lines = textwrap.wrap(text, width=16)
         self.clear()
         self._display_string(lines[0], 1)
         if len(lines) == 2:
             self._display_string(lines[1], 2)
         elif len(lines) > 2:
-            scroll_lines = []
-            # concat lines except the first one (is printed on line 1)
-            for i in range(1, len(lines)):
-                scroll_lines.append(lines[i])
-            self._scroll_text = " ".join(scroll_lines)
+            # concat lines except the first item which is printed on line 1
+            self._scroll_text = " ".join(lines[1:])
             self._set_up_scroll_thread()
             self._scroll_thread.start()
 
@@ -149,30 +156,21 @@ class Lcd:
 
     def _write_command(self, cmd: int):
         """
-        Write value to Instruction register (IR)
-        @type cmd: command from instruction table -> datasheet p29s
+        Write value to IR
+        @type cmd:
         """
         self._bus.write_byte_data(self._addr, CTRLBYTE_COMMAND, cmd)
         sleep(0.0001)
 
     def _write_data(self, data: int):
-        """
-        Write value to DDRAM/CGRAM
-        @type data: int
-        """
+        """Write value to DDRAM/CGRAM"""
         self._bus.write_byte_data(self._addr, CTRLBYTE_DATA, data)
         sleep(0.0001)
 
     def _write_block_data(self, data: List[int]):
-        """
-        Write list of values to DDRAM/CGRAM
-        @type data: List[int]
-        """
+        """Write """
         self._bus.write_i2c_block_data(self._addr, CTRLBYTE_DATA, data)
         sleep(0.0001)
 
-# test
-if __name__ == '__main__':
-    lcd = Lcd()
-    lcd.clear()
-    lcd.display_text("We are the peoples front of Judea, not the Judea peoples front or the Judea popular people front!")
+
+lcd = Lcd()

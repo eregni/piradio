@@ -65,34 +65,18 @@ atexit module catches SIGINT.
     You need to specify the kill signal in the systemd service since it sends by default SIGTERM
     -> KillSignal=SIGINT
 """
+import atexit
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
-import atexit
-from time import time, sleep
-from enum import Enum
-from datetime import datetime
-from functools import partial
-from threading import Event
-from typing import Optional
+from time import sleep
 
-from gpiozero import Button, OutputDevice, RotaryEncoder
-import setproctitle
 import mpv
-from lcd_screen import Lcd
-from station_list import STATION_LIST, Station
+import setproctitle
 
-# Config ################################################################################
-AUDIO_DEVICE = 'alsa/hw:CARD=sndrpihifiberry'  # to check hw devices -> aplay -L
-SAVED_STATION = 'last_station.txt'  # save last opened station
-PIN_BTN_TOGGLE = 24
-PIN_BTN_ROTARY = 25
-PIN_ROTARY_DT = 5  # Momentary encoder DT
-PIN_ROTARY_CLK = 6  # Momentary encoder CLK
-LCD_POWER_PIN = 16
-BTN_BOUNCE = 0.05  # Button debounce time in seconds
-LOG_LEVEL = logging.INFO
-# End config ################################################################################
+from config import Config
+from models.enums import States
+from radio import Radio
 
 # Logging config ############################################################################
 LOG_FORMATTER = logging.Formatter(
@@ -102,246 +86,42 @@ LOG_FORMATTER = logging.Formatter(
 LOG_FORMATTER.default_msec_format = '%s.%03d'
 LOG_HANDLER_FILE = RotatingFileHandler(filename='piradio.log', maxBytes=2000, backupCount=1)
 LOG_HANDLER_FILE.setFormatter(LOG_FORMATTER)
-LOG_HANDLER_FILE.setLevel(LOG_LEVEL)
+LOG_HANDLER_FILE.setLevel(Config.LOG_LEVEL)
 LOG_HANDLER_CONSOLE = logging.StreamHandler()
 LOG_HANDLER_CONSOLE.setFormatter(LOG_FORMATTER)
-LOG_HANDLER_CONSOLE.setLevel(LOG_LEVEL)
+LOG_HANDLER_CONSOLE.setLevel(Config.LOG_LEVEL)
 LOG = logging.getLogger()
 LOG.addHandler(LOG_HANDLER_FILE)
-if LOG_LEVEL == logging.DEBUG:
+if Config.LOG_LEVEL == logging.DEBUG:
     LOG.addHandler(LOG_HANDLER_CONSOLE)
-LOG.setLevel(LOG_LEVEL)
+LOG.setLevel(Config.LOG_LEVEL)
 # End logging config #######################################################################
 
-class Direction(Enum):
-    CLOCKWISE = True
-    COUNTERCLOCKWISE = False
-
-def mpv_log(loglevel: str, component: str, message: str):
-    """Log handler for the python-mpv.MPV instance"""
-    LOG.warning('[python-mpv] [%s] %s: %s', loglevel, component, message)
-
-def get_saved_station(filename: str) -> Station:
-    """
-    Get saved RADIO index nr
-    @param filename: str, file name
-    @return: Station
-    """
-    try:
-        with open(filename, 'r', encoding='utf-8') as file:
-            index = int(file.readline())
-        LOG.debug("Retrieving saved last radio index: %s",index)
-    except FileNotFoundError:
-        index = 0
-        LOG.warning("Error while reading saved playlist index nr. Getting first item instead")
-
-    return STATION_LIST[index]
-
-def save_last_station(filename: str, radio: Station):
-    """
-    Save station RADIO index to file
-    @param filename: str, file name
-    @param radio: Station
-    """
-    index = STATION_LIST.index(radio)
-    with open(filename, 'w', encoding='utf-8') as file:
-        file.write(str(index))
-    LOG.debug("Saved RADIO index %s to file", index)
 
 @atexit.register
 def exit_program():
     """handler for atexit -> stop mpv player. clear lcd screen"""
-    RADIO.stop()
+    Radio.stop()
     line = "#" * 75
     LOG.info("Atexit handler triggered. Exit program\n%s\n", line)
     sys.exit(0)
 
-class States(Enum):
-    OFF = 0
-    MAIN = 1
-    START_STREAM = 2
-    PLAYING = 3
-    SELECT_STATION = 4
 
-class Radio:
-    def __init__(self):
-        self._station: Station = get_saved_station(SAVED_STATION)
-        self._state: States = States.OFF
-        self._player:  mpv.MPV = mpv.MPV(log_handler=mpv_log, audio_device=AUDIO_DEVICE, ytdl=False)
-        self._player.set_loglevel('error')
-        self._icy_title: str = ""
+setproctitle.setproctitle("piradio")
+LOG.info("Start program")
+try:
+    while True:
+        # check if radio sends new icy metadata
+        if Radio.state() is States.PLAYING:
+            Radio.check_metadata()
 
-    @property
-    def station(self):
-        return self._station
+        # check if a new station has been selected
+        if Radio.state() is States.SELECT_STATION:
+            Radio.check_select_station()
 
-    @property
-    def state(self):
-        return self._state
+        sleep(0.01)
 
-    def stop(self):
-        """Stop the radio"""
-        self._state = States.OFF
-        LOG.info("Stop player")
-        LCD.clear()
-        self._player.stop()
-        BUTTON_PANEL.disable()
-
-    def start(self):
-        """Start the radio"""
-        LOG.info("Start player")
-        BUTTON_PANEL.enable()
-        self.play()
-
-    def select_station(self):
-        """
-        This function should be called by the rotary encoder.
-        Display the next (or previous) station name on lcd.
-        If you push the rotary encoder OR wait for 3 seconds, the current displayed station will start playing.
-        """
-        self._state = States.SELECT_STATION
-        timestamp = time()
-        new_station = self._station
-        while time() - timestamp <= 3:
-            if BUTTON_PANEL.rotary_twist_event.isSet():
-                # the first call from the rotary handler ends up here
-                BUTTON_PANEL.rotary_twist_event.clear()
-                timestamp = time()
-                new_station = self.switch_station(BUTTON_PANEL.rotary_direction)
-                LCD.display_text(self._station.name)
-
-            elif BUTTON_PANEL.button_select_event.isSet():
-                BUTTON_PANEL.button_select_event.clear()
-                self._station = new_station
-                self.play()
-                return
-
-        if new_station != self._station:
-            self.play()
-
-    def switch_station(self, direction: Direction) -> Station:
-        """
-        Switch station. Get station based on the value from ButtonPanel.rotary_direction
-        @return: Station. New selected Station from STATION_LIST
-        """
-        index = STATION_LIST.index(self._station)
-        if direction == Direction.CLOCKWISE:
-            index = 0 if index == len(STATION_LIST) - 1 else index + 1
-        else:
-            index = len(STATION_LIST) - 1 if index == 0 else index - 1
-
-        return STATION_LIST[index]
-
-    def play(self):
-        """
-        Start playing current station. Display error message when PLAYER is still idle after n seconds
-        """
-        timeout = 60
-        self._state = States.START_STREAM
-        timestamp = time()
-        LCD.display_text("Tuning...")
-        self._player.play(self._station.url)
-        while self._player.core_idle:
-            if time() - timestamp >= timeout:
-                LOG.error("Cannot start radio")
-                LCD.display_text("ERROR: cannot start playing")
-                self._state = States.MAIN
-                return
-
-        LCD.display_text(self._station.name)
-        save_last_station(SAVED_STATION, self._station)
-        LOG.info("Radio stream started: %s - %s", self._station.name, self._station.url)
-        self._state = States.PLAYING
-
-    def check_metadata(self):
-        """Update the metadata on the lcd screen if necessary"""
-        try:
-            if self._icy_title != self._player.metadata['icy-title']:
-                self._icy_title = self._player.metadata['icy-title']
-                if self._icy_title == "":
-                    LCD.display_text(self._station.name)
-                else:
-                    LCD.display_text(self._icy_title)
-        except (AttributeError, KeyError):
-            pass  # ignore exceptions raised because of missing 'metadata' attribute or missing 'icy-title' key
-
-# Button handlers
-def btn_toggle_handler():
-    """Handler for the 'toggle radio' button"""
-    LOG.debug("Button toggle radio pressed")
-    if RADIO.state == States.OFF:
-        RADIO.start()
-    else:
-        RADIO.stop()
-
-def btn_select_handler():
-    """
-    Handler for push button from rotary encoder:
-        1: When pressed -> show radio name on lcd display
-        2: After rotation with rotary encoder -> play selected radio station
-    """
-    LOG.debug("Btn_select pressed")
-    if RADIO.state == States.PLAYING:
-        LCD.display_text(RADIO.station.name)
-    elif RADIO.state == States.SELECT_STATION:
-        BUTTON_PANEL.button_select_event.set()
-
-
-def btn_rotary_handler(direction: Direction):
-    """Handler -> start select_station"""
-    LOG.debug("Rotary encoder turned %s. counter = %s", direction.name, BUTTON_PANEL.rotary_steps)
-    BUTTON_PANEL.rotary_direction = direction
-    BUTTON_PANEL.rotary_twist_event.set()
-    if RADIO.state in [States.MAIN, States.PLAYING]:
-        RADIO.select_station()
-# End Button handlers
-
-class ButtonPanel:
-    def __init__(self):
-        self.button_select_event = Event()
-        self.rotary_twist_event = Event()
-        self.rotary_direction: Optional[Direction] = None
-        self._button_toggle_radio: Button = Button(PIN_BTN_TOGGLE, pull_up=True, bounce_time=BTN_BOUNCE)
-        self._button_toggle_radio.when_pressed = btn_toggle_handler  # always enabled
-        self._button_select: Button = Button(PIN_BTN_ROTARY, pull_up=True, bounce_time=BTN_BOUNCE)
-        self._button_rotary: RotaryEncoder = RotaryEncoder(PIN_ROTARY_DT, PIN_ROTARY_CLK, bounce_time=BTN_BOUNCE,
-                                                           max_steps=len(STATION_LIST) - 1)
-        self._button_rotary.steps = 0
-
-    @property
-    def rotary_steps(self):
-        return self._button_rotary.steps
-
-    def enable(self):
-        """Connect button handlers"""
-        self._button_rotary.when_rotated_clockwise = partial(btn_rotary_handler, Direction.CLOCKWISE)
-        self._button_rotary.when_rotated_counter_clockwise = partial(btn_rotary_handler, Direction.COUNTERCLOCKWISE)
-        self._button_select.when_pressed = btn_select_handler
-
-    def disable(self):
-        """Disconnect button handlers"""
-        self._button_rotary.when_rotated_clockwise = None
-        self._button_rotary.when_rotated_counter_clockwise = None
-        self._button_select.when_pressed = None
-
-# Global vars (Radio, Lcd, ButtonPanel)
-lcd_power = OutputDevice(LCD_POWER_PIN)
-lcd_power.on()  # turn on lcd
-LCD = Lcd()
-BUTTON_PANEL = ButtonPanel()
-RADIO = Radio()
-
-if __name__ == "__main__":
-    setproctitle.setproctitle("piradio")
-    LOG.info("Start program")
-    try:
-        while True:
-            if RADIO.state == States.PLAYING:
-                RADIO.check_metadata()
-
-            sleep(3)  # check for icy metadata every 3 seconds
-
-    except mpv.ShutdownError:
-        LOG.error("ShutdownError from mpv")
-    finally:
-        exit_program()
+except mpv.ShutdownError:
+    LOG.error("ShutdownError from mpv")
+finally:
+    exit_program()
