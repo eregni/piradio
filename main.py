@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """
 Script to play radio streams on a raspberrypi, pimped with an "audiophonics sabre dac v3" audio card
-Controlled by two buttons: 1 Rotary encoder with push button to select stations and one push button start/stop the radio
+Controlled by two buttons: 1 Rotary encoder with push button to select stations and one push button to start/stop the radio.
 An 16x2 lcd-display is used to show the radio name and track information.
 It runs as a systemd service.
 

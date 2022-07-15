@@ -1,15 +1,15 @@
 import logging
 from datetime import datetime
 from functools import partial
-from time import time, sleep
+from time import time
 
 import mpv
 from gpiozero import Button, RotaryEncoder
 
-from models.enums import States, Direction
-from models.stations import Station, STATION_LIST
 from config import Config
 from lcd_screen import lcd
+from models.enums import States, Direction
+from models.stations import Station, STATION_LIST
 
 LOG = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class Radio:
         """Stop the radio"""
         cls._state = States.OFF
         LOG.info("Stop player")
-        lcd.clear()
+        lcd.lcd_backlight_toggle(on=False)
         Radio._player.stop()
         ButtonPanel.disable()
 
@@ -75,7 +75,7 @@ class Radio:
     def start(cls):
         """Start the radio"""
         LOG.info("Start player")
-        lcd.clear()
+        lcd.lcd_backlight_toggle(on=True)
         ButtonPanel.enable()
         Radio.play(cls.station)
 
@@ -103,19 +103,16 @@ class Radio:
         else:
             index = len(STATION_LIST) - 1 if index == 0 else index - 1
 
-        print(f"cls.new_station: {cls.new_station}")
         cls.new_station = STATION_LIST[index]
         cls.set_lcd_text(cls.new_station.name)
 
     @classmethod
     def play(cls, station: Station):
         """Start playing station. Display error message when PLAYER is still idle after n seconds"""
-        print(f"PLAY: cls.new_station: {cls.new_station}")
         cls._state = States.START_STREAM
         timestamp = time()
         lcd.clear()
         cls.set_lcd_text("Tuning...")
-        sleep(3)
         cls.station = station
         Radio._player.play(Radio.station.url)
         while Radio._player.core_idle:

@@ -9,6 +9,9 @@ class Config:
     AUDIO_DEVICE = 'alsa/hw:CARD=sndrpihifiberry'  # to check hw devices -> aplay -L
     TIMEOUT = 30
 
+    # lcd
+    SCROLL_DELAY = 0.75  # SET SPEED OF SCROLLING TEXT (1=1sec/hop)
+
     # rpi pins
     PIN_BTN_TOGGLE = 24
     PIN_BTN_ROTARY = 25
@@ -18,7 +21,7 @@ class Config:
     LCD_POWER_PIN = 16
 
     # log
-    LOG_LEVEL = logging.DEBUG
+    LOG_LEVEL = logging.INFO
     LOG_FILE = 'piradio.log'
     LOG_FORMATTER = logging.Formatter(
         fmt='[%(asctime)s.%(msecs)03d] [%(module)s] %(levelname)s: %(message)s',

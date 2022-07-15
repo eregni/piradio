@@ -8,7 +8,7 @@ Modified for working with VA LCD
 """
 import logging
 import textwrap
-from time import sleep
+from time import sleep, time
 from threading import Thread
 from typing import List
 
@@ -21,7 +21,6 @@ LOG = logging.getLogger(__name__)
 
 BUS = 1  # SET TO I2C BUS NR
 ADDR = 0x3c  # SET THE I2C ADDRESS HERE
-SCROLL_DELAY = 0.75  # SET SPEED OF SCROLLING TEXT (1=1sec/hop)
 
 # other commands
 LCD_CLEARDISPLAY = 0x01
@@ -65,10 +64,6 @@ LCD_5x8DOTS = 0x00
 CTRLBYTE_DATA = 0x40  # write to DDRAM/CGRAM
 CTRLBYTE_COMMAND = 0x00  # write to IR
 
-# todo: give lcd separate power and turn only led on/off when Radio.start/Radio.stop is called
-lcd_power = OutputDevice(Config.LCD_POWER_PIN)
-lcd_power.on()  # turn on lcd
-
 
 class Lcd:
     """
@@ -79,7 +74,8 @@ class Lcd:
         self._scroll_text = ""
         self._addr = addr
         self._bus = SMBus(bus)
-        self._set_up_scroll_thread()
+        self._scroll_thread = Thread(target=self._scroll, name="scroll_thread")
+        self._lcd_backlight = OutputDevice(Config.LCD_POWER_PIN)
 
         # initialize
         sleep(0.02)
@@ -113,6 +109,14 @@ class Lcd:
         self._write_command(LCD_RETURNHOME)
         sleep(0.001)
 
+    def lcd_backlight_toggle(self, on: bool):
+        """Toggle lcd backlight"""
+        self.clear()
+        if on:
+            self._lcd_backlight.on()
+        else:
+            self._lcd_backlight.off()
+
     def _display_string(self, string: str, line: int):
         """
         Print string on lcd screen
@@ -131,24 +135,33 @@ class Lcd:
     def _scroll(self):
         """Scroll text on lcd. To be run in separate thread"""
         scroll_index = 0
+        timer = time()
+        delay = Config.SCROLL_DELAY
+
         while self._scroll_text:
+            if time() - timer < delay:
+                continue
+
             text = self._scroll_text[scroll_index: scroll_index + 16]
             self._display_string(text, 2)
 
             if scroll_index in [0, len(self._scroll_text) - 16]:
                 # add two seconds delay at start and end of the text line. Otherwise, it's harder to read
-                sleep(SCROLL_DELAY + 2)
+                delay = Config.SCROLL_DELAY + 2
             else:
-                sleep(SCROLL_DELAY)
+                delay = Config.SCROLL_DELAY
 
             if scroll_index >= len(self._scroll_text) - 16:
                 scroll_index = 0
             else:
                 scroll_index += 1
 
+            timer = time()
+            sleep(0.01)  # drop cpu usage?
+
     def _stop_scrolling(self):
         self._scroll_text = ""
-        if isinstance(self._scroll_thread, Thread) and self._scroll_thread.is_alive():
+        if self._scroll_thread.is_alive():
             self._scroll_thread.join()
 
     def _set_up_scroll_thread(self):
