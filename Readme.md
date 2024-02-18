@@ -35,6 +35,7 @@ python modules:
 - python-mpv
 - gpiozero
 - smbus
+- setproctitle
 
 gpio permissions:  
     create file '99-gpio.rules' in /etc/udev/rules.d/ and add following config:  
@@ -59,6 +60,7 @@ i2c group and permission settings ([source](https://arcanesciencelab.wordpress.c
 
 Check the 'config.py' file and change parameters where necessary.  
 Test the script by running 'main.py'.  
+Copy the 'piradio.service' file to '/etc/systemd/system/' and set parameters
 Enable the service after successful test.  
 The file 'models/stations.py' contains the list of selectable radio stations.
 
